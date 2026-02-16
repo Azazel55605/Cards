@@ -1145,8 +1145,9 @@ impl Cards {
         .floating_button(floating_button)
         .into();
 
-        // Add sidebar overlay (on top of cards and menus)
-        view = Overlay::new(view, sidebar, bg_color).into();
+        // IMPORTANT: Add sidebar overlay LAST (except settings) to ensure it renders on top of all card elements
+        // The order is: base canvas -> context menu -> card menu -> toolbar -> SIDEBAR -> settings
+        view = Overlay::new(view, sidebar, Color::TRANSPARENT).into();
 
         // Add settings modal LAST (on top of everything)
         if self.settings_open {

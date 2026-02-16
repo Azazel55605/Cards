@@ -249,7 +249,7 @@ impl DotGrid {
                 height: card.height,
             };
 
-            // Don't skip drawing - the sidebar/settings will clip using layers
+            // Sidebar now uses renderer.with_layer() to ensure it renders on top of canvas
             let corner_radius = 12.0;
 
             // Draw card background with theme color

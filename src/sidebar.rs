@@ -122,41 +122,42 @@ where
 
         // Only draw sidebar if it's visible
         if sidebar_x + self.width > 0.0 {
-            // Draw background with shadow
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: sidebar_bounds,
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 12.0.into(),
+            // Use a layer to ensure sidebar renders on top of canvas (like settings modal)
+            renderer.with_layer(full_bounds, |renderer| {
+                // Draw background with shadow
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: sidebar_bounds,
+                        border: Border {
+                            color: Color::TRANSPARENT,
+                            width: 0.0,
+                            radius: 12.0.into(),
+                        },
+                        shadow: Shadow {
+                            color: self.shadow,
+                            offset: Vector::new(4.0, 4.0),
+                            blur_radius: 12.0,
+                        },
                     },
-                    shadow: Shadow {
-                        color: self.shadow,
-                        offset: Vector::new(4.0, 4.0),
-                        blur_radius: 12.0,
-                    },
-                },
-                self.background,
-            );
+                    self.background,
+                );
 
-            // Draw content
-            if let Some(content_layout) = children.next() {
-                // Translate cursor for content
-                let translated_cursor = if let Some(pos) = cursor.position() {
-                    if sidebar_bounds.contains(pos) {
-                        mouse::Cursor::Available(Point::new(
-                            pos.x - sidebar_x,
-                            pos.y - sidebar_y,
-                        ))
+                // Draw content
+                if let Some(content_layout) = children.next() {
+                    // Translate cursor for content
+                    let translated_cursor = if let Some(pos) = cursor.position() {
+                        if sidebar_bounds.contains(pos) {
+                            mouse::Cursor::Available(Point::new(
+                                pos.x - sidebar_x,
+                                pos.y - sidebar_y,
+                            ))
+                        } else {
+                            cursor
+                        }
                     } else {
                         cursor
-                    }
-                } else {
-                    cursor
-                };
+                    };
 
-                renderer.with_layer(sidebar_bounds, |renderer| {
                     renderer.with_translation(
                         Vector::new(sidebar_x, sidebar_y),
                         |renderer| {
@@ -171,8 +172,8 @@ where
                             );
                         },
                     );
-                });
-            }
+                }
+            });
         } else {
             // Skip content layout
             children.next();
