@@ -311,6 +311,38 @@ impl CustomTextEditor {
         self.last_blink = Instant::now();
     }
 
+    /// Wrap the selected text (or insert at cursor if no selection) with prefix and suffix
+    pub fn wrap_selection(&mut self, prefix: &str, suffix: &str) {
+        if let Some(sel_start) = self.selection_start {
+            // Get selection bounds
+            let start = sel_start.min(self.cursor_position);
+            let end = sel_start.max(self.cursor_position);
+            
+            // Build new text by cloning the current text first
+            let old_text = self.text.clone();
+            let before = &old_text[..start];
+            let selected = &old_text[start..end];
+            let after = &old_text[end..];
+            
+            // Build new text
+            self.text = format!("{}{}{}{}{}", before, prefix, selected, suffix, after);
+            
+            // Position cursor after the wrapped text
+            self.cursor_position = start + prefix.len() + selected.len() + suffix.len();
+            self.selection_start = None;
+        } else {
+            // No selection, just insert prefix+suffix at cursor
+            let old_text = self.text.clone();
+            let before = &old_text[..self.cursor_position];
+            let after = &old_text[self.cursor_position..];
+            
+            self.text = format!("{}{}{}{}", before, prefix, suffix, after);
+            // Position cursor between prefix and suffix
+            self.cursor_position += prefix.len();
+        }
+        self.last_blink = Instant::now();
+    }
+
     /// Render the text editor content with cursor
     pub fn render(
         &self,

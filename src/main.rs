@@ -150,6 +150,16 @@ pub enum Message {
     CardEditorAction(usize, text_editor::Action),
     KeyboardInput(iced::keyboard::Event),
     StopEditingCard,
+    // Toolbar messages
+    FormatBold,
+    FormatItalic,
+    FormatStrikethrough,
+    FormatCode,
+    FormatCodeBlock,
+    FormatHeading,
+    FormatBullet,
+    DuplicateCard(usize),
+    DeleteCard(usize),
 }
 
 struct Cards {
@@ -172,6 +182,7 @@ struct Cards {
     card_icon_menu_card_id: Option<usize>,
     // Card editing state
     editing_card_id: Option<usize>,
+    selected_card_id: Option<usize>,  // Track selected card for toolbar
     // Configuration
     config: Config,
     // Cache SVG handles
@@ -219,6 +230,7 @@ impl Cards {
             card_icon_menu_position: None,
             card_icon_menu_card_id: None,
             editing_card_id: None,
+            selected_card_id: None,
             config,
             icon_menu_left: svg::Handle::from_path("src/icons/menu-left.svg"),
             icon_menu_right: svg::Handle::from_path("src/icons/menu-right.svg"),
@@ -357,6 +369,7 @@ impl Cards {
                             card.is_editing = false; // Stop editing when dragging
                         }
                         self.editing_card_id = None;
+                        self.selected_card_id = None;
                         self.dot_grid.clear_cards_cache();
                     }
                     DotGridMessage::CardLeftClickBody(card_id) => {
@@ -369,10 +382,12 @@ impl Cards {
                                 }
                             }
                             self.editing_card_id = None;
+                            self.selected_card_id = None;
                             self.dot_grid.clear_cards_cache();
                         } else {
-                            // Start editing the card
+                            // Start editing the card and select it
                             self.editing_card_id = Some(card_id);
+                            self.selected_card_id = Some(card_id);
                             if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                                 card.is_editing = true;
                                 // Select all text when starting to edit
@@ -616,6 +631,7 @@ impl Cards {
                                         // eprintln!("-> Escape - exiting edit mode");
                                         card.is_editing = false;
                                         self.editing_card_id = None;
+                                        self.selected_card_id = None;
                                         true
                                     }
                                     _ => false
@@ -768,11 +784,96 @@ impl Cards {
                     }
                 }
                 self.editing_card_id = None;
+                self.selected_card_id = None;
                 self.dot_grid.clear_cards_cache();
             }
             Message::HideCardIconMenu => {
                 self.card_icon_menu_position = None;
                 self.card_icon_menu_card_id = None;
+            }
+            Message::FormatBold => {
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.content.wrap_selection("**", "**");
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::FormatItalic => {
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.content.wrap_selection("*", "*");
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::FormatStrikethrough => {
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.content.wrap_selection("~~", "~~");
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::FormatCode => {
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.content.wrap_selection("`", "`");
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::FormatCodeBlock => {
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.content.wrap_selection("```\n", "\n```");
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::FormatHeading => {
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.content.wrap_selection("# ", "");
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::FormatBullet => {
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.content.wrap_selection("- ", "");
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::DuplicateCard(card_id) => {
+                if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id).cloned() {
+                    let new_pos = Point::new(
+                        card.current_position.x + 20.0,
+                        card.current_position.y + 20.0,
+                    );
+                    let new_card_id = self.dot_grid.add_card_with_content(
+                        new_pos,
+                        card.content.text(),
+                        card.icon,
+                        card.color,
+                    );
+                    self.selected_card_id = Some(new_card_id);
+                    self.dot_grid.clear_cards_cache();
+                }
+            }
+            Message::DeleteCard(card_id) => {
+                // Remove the card using DotGrid's method
+                self.dot_grid.delete_card(card_id);
+
+                // Clear selection if this was the selected card
+                if self.selected_card_id == Some(card_id) {
+                    self.selected_card_id = None;
+                }
+                if self.editing_card_id == Some(card_id) {
+                    self.editing_card_id = None;
+                }
             }
         }
         Task::none()
@@ -848,6 +949,30 @@ impl Cards {
             .into();
 
             view = Overlay::new(view, card_menu, Color::TRANSPARENT).into();
+        }
+
+        // Add card toolbar (before sidebar) - shown when a card is selected
+        if let Some(card_id) = self.selected_card_id {
+            if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
+                // Position toolbar above the card, centered
+                // Toolbar width is 340.0, so offset by half to center it
+                let toolbar_x = card.current_position.x + self.canvas_offset.x + (card.width / 2.0) - 170.0;
+                let toolbar_y = card.current_position.y + self.canvas_offset.y - 70.0;
+                let toolbar_pos = Point::new(toolbar_x, toolbar_y);
+
+                let toolbar_content = self.build_card_toolbar(card_id);
+                let toolbar: Element<Message> = ContextMenu::new(
+                    toolbar_content,
+                    toolbar_pos,
+                    self.theme.sidebar_background(),
+                    self.theme.button_border(),
+                    self.theme.sidebar_shadow(),
+                )
+                .width(340.0)
+                .into();
+
+                view = Overlay::new(view, toolbar, Color::TRANSPARENT).into();
+            }
         }
 
         // Build sidebar content with title
@@ -1273,6 +1398,163 @@ impl Cards {
                 }
             })
             .into()
+    }
+
+    fn build_card_toolbar(&self, card_id: usize) -> Element<Message> {
+        let btn_style = CardButtonStyle {
+            background: Color::TRANSPARENT,
+            background_hovered: self.theme.button_background_hovered(),
+            text_color: self.theme.button_text(),
+            border_color: Color::TRANSPARENT,
+            shadow_color: Color::TRANSPARENT,
+        };
+
+        // Markdown formatting buttons
+        let bold_btn = button(
+            container(
+                text("B").size(14).font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..Default::default()
+                })
+            )
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::FormatBold);
+
+        let italic_btn = button(
+            container(
+                text("I").size(14).font(iced::Font {
+                    style: iced::font::Style::Italic,
+                    ..Default::default()
+                })
+            )
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::FormatItalic);
+
+        let strike_btn = button(
+            container(text("S̶").size(14))
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::FormatStrikethrough);
+
+        let code_btn = button(
+            container(text("<>").size(12))
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::FormatCode);
+
+        let code_block_btn = button(
+            container(text("{ }").size(12))
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::FormatCodeBlock);
+
+        let heading_btn = button(
+            container(text("H").size(14).font(iced::Font {
+                weight: iced::font::Weight::Bold,
+                ..Default::default()
+            }))
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::FormatHeading);
+
+        let bullet_btn = button(
+            container(text("•").size(16))
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::FormatBullet);
+
+        // Separator
+        let separator_color = self.theme.separator_color();
+        let separator = container(Space::with_width(1))
+            .width(1)
+            .height(24)
+            .style(move |_theme: &IcedTheme| {
+                container::Style {
+                    background: Some(iced::Background::Color(separator_color)),
+                    border: Border::default(),
+                    shadow: Shadow::default(),
+                    text_color: None,
+                }
+            });
+
+        // Card management buttons
+        let duplicate_btn = button(
+            container(text("⎘").size(16))
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::DuplicateCard(card_id));
+
+        let delete_btn = button(
+            container(text("🗑").size(14))
+            .width(32)
+            .height(28)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+        )
+        .class(btn_style.clone())
+        .on_press(Message::DeleteCard(card_id));
+
+        let bg_color = self.theme.sidebar_background();
+
+        container(
+            row![
+                bold_btn,
+                italic_btn,
+                strike_btn,
+                code_btn,
+                code_block_btn,
+                heading_btn,
+                bullet_btn,
+                separator,
+                duplicate_btn,
+                delete_btn,
+            ]
+            .spacing(2)
+            .padding(6)
+        )
+        .style(move |_theme: &IcedTheme| {
+            container::Style {
+                background: Some(iced::Background::Color(bg_color)),
+                border: Border::default(),
+                shadow: Shadow::default(),
+                text_color: None,
+            }
+        })
+        .into()
     }
 
     fn build_settings_content(&self) -> Element<Message> {

@@ -133,7 +133,7 @@ where
                     border: Border {
                         color: self.border_color,
                         width: 1.0,
-                        radius: 8.0.into(),
+                        radius: 10.0.into(),
                     },
                     shadow: Shadow {
                         color: self.shadow_color,
@@ -251,11 +251,15 @@ where
 
                         return status;
                     } else {
-                        // Click outside menu - close it
+                        // Click outside menu
                         if let Some(ref on_close) = self.on_close {
+                            // If we have an on_close handler, trigger it and capture the event
                             shell.publish(on_close.clone());
+                            return iced::event::Status::Captured;
+                        } else {
+                            // No on_close handler - let the click pass through to widgets below
+                            return iced::event::Status::Ignored;
                         }
-                        return iced::event::Status::Captured;
                     }
                 }
             }

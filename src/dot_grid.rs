@@ -136,6 +136,28 @@ impl DotGrid {
         id
     }
 
+    pub fn add_card_with_content(
+        &mut self,
+        screen_position: Point,
+        content: &str,
+        icon: crate::card::CardIcon,
+        color: Color,
+    ) -> usize {
+        let id = self.cards.len();
+        let world_position = Point::new(
+            screen_position.x - self.offset.x,
+            screen_position.y - self.offset.y,
+        );
+        let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
+        let mut card = Card::new(id, snapped_position);
+        card.content = crate::custom_text_editor::CustomTextEditor::with_text(content);
+        card.icon = icon;
+        card.color = color;
+        self.cards.push(card);
+        self.cards_cache.clear();
+        id
+    }
+
     pub fn clear_cards_cache(&mut self) {
         self.cards_cache.clear();
     }
@@ -146,6 +168,11 @@ impl DotGrid {
 
     pub fn cards_mut(&mut self) -> &mut [Card] {
         &mut self.cards
+    }
+
+    pub fn delete_card(&mut self, card_id: usize) {
+        self.cards.retain(|c| c.id != card_id);
+        self.cards_cache.clear();
     }
 
     pub fn update_card_animation(&mut self, delta_time: f32) {
