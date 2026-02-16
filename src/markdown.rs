@@ -47,7 +47,6 @@ impl MarkdownRenderer {
                             if current_y > position.y {
                                 current_y += line_height * 0.5; // Add spacing before paragraph
                             }
-                            current_x = position.x; // Reset x position for new paragraph
                         }
                         Tag::Heading(level, _, _) => {
                             current_size = match level {
@@ -63,35 +62,10 @@ impl MarkdownRenderer {
                             if current_y > position.y {
                                 current_y += line_height * 0.5; // Add spacing before heading
                             }
-                            current_x = position.x; // Reset x position
                         }
-                        Tag::Strong => {
-                            // Render accumulated text before changing style
-                            if !current_line.is_empty() {
-                                self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
-                                current_x += current_line.len() as f32 * current_size * 0.6;
-                                current_line.clear();
-                            }
-                            is_bold = true;
-                        }
-                        Tag::Emphasis => {
-                            // Render accumulated text before changing style
-                            if !current_line.is_empty() {
-                                self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
-                                current_x += current_line.len() as f32 * current_size * 0.6;
-                                current_line.clear();
-                            }
-                            is_italic = true;
-                        }
-                        Tag::Strikethrough => {
-                            // Render accumulated text before changing style
-                            if !current_line.is_empty() {
-                                self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
-                                current_x += current_line.len() as f32 * current_size * 0.6;
-                                current_line.clear();
-                            }
-                            is_strikethrough = true;
-                        }
+                        Tag::Strong => is_bold = true,
+                        Tag::Emphasis => is_italic = true,
+                        Tag::Strikethrough => is_strikethrough = true,
                         Tag::List(_) => {
                             if current_y > position.y {
                                 current_y += line_height * 0.3;
@@ -141,7 +115,6 @@ impl MarkdownRenderer {
                                 current_line.clear();
                             }
                             current_y += line_height * 0.5; // Add spacing after paragraph
-                            current_x = position.x; // Reset x position
                         }
                         Tag::Heading(_, _, _) => {
                             if !current_line.is_empty() {
@@ -153,35 +126,10 @@ impl MarkdownRenderer {
                             is_bold = false;
                             current_size = 12.0;
                             line_height = 14.0;
-                            current_x = position.x; // Reset x position
                         }
-                        Tag::Strong => {
-                            // Render accumulated text before changing style
-                            if !current_line.is_empty() {
-                                self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
-                                current_x += current_line.len() as f32 * current_size * 0.6;
-                                current_line.clear();
-                            }
-                            is_bold = false;
-                        }
-                        Tag::Emphasis => {
-                            // Render accumulated text before changing style
-                            if !current_line.is_empty() {
-                                self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
-                                current_x += current_line.len() as f32 * current_size * 0.6;
-                                current_line.clear();
-                            }
-                            is_italic = false;
-                        }
-                        Tag::Strikethrough => {
-                            // Render accumulated text before changing style
-                            if !current_line.is_empty() {
-                                self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
-                                current_x += current_line.len() as f32 * current_size * 0.6;
-                                current_line.clear();
-                            }
-                            is_strikethrough = false;
-                        }
+                        Tag::Strong => is_bold = false,
+                        Tag::Emphasis => is_italic = false,
+                        Tag::Strikethrough => is_strikethrough = false,
                         Tag::Item => {
                             if !current_line.is_empty() {
                                 self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);

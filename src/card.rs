@@ -1,5 +1,5 @@
 use iced::{Color, Point, Rectangle};
-use iced::widget::text_editor;
+use crate::custom_text_editor::CustomTextEditor;
 
 #[derive(Debug)]
 pub struct Card {
@@ -11,7 +11,7 @@ pub struct Card {
     pub icon: CardIcon,
     pub color: Color,
     pub is_dragging: bool,
-    pub content: text_editor::Content,
+    pub content: CustomTextEditor,
     pub is_editing: bool,
 }
 
@@ -26,7 +26,7 @@ impl Clone for Card {
             icon: self.icon,
             color: self.color,
             is_dragging: self.is_dragging,
-            content: text_editor::Content::with_text(&self.content.text()),
+            content: self.content.clone(),
             is_editing: self.is_editing,
         }
     }
@@ -68,7 +68,7 @@ impl Card {
             icon: CardIcon::Default,
             color: Color::from_rgb8(100, 150, 255), // Default blue
             is_dragging: false,
-            content: text_editor::Content::new(),
+            content: CustomTextEditor::new(),
             is_editing: false,
         }
     }

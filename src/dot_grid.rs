@@ -250,18 +250,40 @@ impl DotGrid {
                 card.color,
             );
 
-            // Only draw content when NOT editing
-            // When editing, the text_editor widget will be overlaid on top
-            if !card.is_editing {
-                let content_text = card.content.text();
-                if !content_text.is_empty() {
-                    let text_x = card_rect.x + 10.0;
-                    let text_y = card_rect.y + top_bar_height + 10.0;
-                    let max_width = card_rect.width - 20.0;
+            // Draw content or custom editor
+            let content_text = card.content.text();
+            
+            if card.is_editing {
+                // Render custom editor with cursor directly in canvas
+                let editor_bounds = Rectangle {
+                    x: card_rect.x,
+                    y: card_rect.y + top_bar_height,
+                    width: card_rect.width,
+                    height: card_rect.height - top_bar_height,
+                };
+                
+                // Cursor color based on theme
+                let cursor_color = if self.card_text.r > 0.5 {
+                    Color::WHITE
+                } else {
+                    Color::BLACK
+                };
+                
+                card.content.render(
+                    frame,
+                    editor_bounds,
+                    self.card_text,
+                    cursor_color,
+                    Color::from_rgba(0.4, 0.6, 1.0, 0.3),
+                );
+            } else if !content_text.is_empty() {
+                // Render as markdown when not editing
+                let text_x = card_rect.x + 10.0;
+                let text_y = card_rect.y + top_bar_height + 10.0;
+                let max_width = card_rect.width - 20.0;
 
-                    let renderer = MarkdownRenderer::new(self.card_text, max_width);
-                    renderer.render(frame, &content_text, Point::new(text_x, text_y));
-                }
+                let renderer = MarkdownRenderer::new(self.card_text, max_width);
+                renderer.render(frame, &content_text, Point::new(text_x, text_y));
             }
 
             // Draw editing indicator (blue border when editing)

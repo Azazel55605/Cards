@@ -9,6 +9,7 @@ mod config;
 mod card;
 mod context_menu;
 mod markdown;
+mod custom_text_editor;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -16,6 +17,7 @@ use iced::{Border, Color, Shadow};
 use iced::time;
 use iced::event::{self, Event};
 use iced::mouse;
+use iced::keyboard;
 use iced::{Padding, Alignment};
 use iced::widget;
 use std::time::{Duration, Instant};
@@ -146,6 +148,7 @@ pub enum Message {
     // Card content editing
     StartEditingCard(usize),
     CardEditorAction(usize, text_editor::Action),
+    KeyboardInput(iced::keyboard::Event),
     StopEditingCard,
 }
 
@@ -372,15 +375,13 @@ impl Cards {
                             self.editing_card_id = Some(card_id);
                             if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                                 card.is_editing = true;
-                                // Move cursor to the end of the text
-                                card.content.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+                                // Select all text when starting to edit
+                                card.content.select_all();
                             }
                             // Close any open menus
                             self.context_menu_position = None;
                             self.card_icon_menu_position = None;
                             self.dot_grid.clear_cards_cache();
-                            // Try to auto-focus the text editor
-                            return widget::focus_next();
                         }
                     }
                     DotGridMessage::CardDrag(card_id, pos, drag_offset) => {
@@ -480,17 +481,67 @@ impl Cards {
                 self.editing_card_id = Some(card_id);
                 if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                     card.is_editing = true;
-                    // Move cursor to the end of the text
-                    card.content.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+                    // Select all text when starting to edit
+                    card.content.select_all();
                 }
                 self.dot_grid.clear_cards_cache();
-                // Try to auto-focus the next focusable widget (the text editor)
-                return widget::focus_next();
             }
             Message::CardEditorAction(card_id, action) => {
-                if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
-                    card.content.perform(action.clone());
-                    self.dot_grid.clear_cards_cache();
+                // Old text_editor action - no longer used with custom editor
+            }
+            Message::KeyboardInput(keyboard_event) => {
+                // Handle keyboard input for editing card
+                if let Some(card_id) = self.editing_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        use iced::keyboard::{Key, Modifiers};
+                        
+                        match keyboard_event {
+                            iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                                match key {
+                                    Key::Character(c) => {
+                                        for ch in c.chars() {
+                                            card.content.insert_char(ch);
+                                        }
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::Enter) => {
+                                        card.content.insert_newline();
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::Backspace) => {
+                                        card.content.backspace();
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::Delete) => {
+                                        card.content.delete();
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::ArrowLeft) => {
+                                        card.content.move_cursor_left(modifiers.shift());
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::ArrowRight) => {
+                                        card.content.move_cursor_right(modifiers.shift());
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::ArrowUp) => {
+                                        card.content.move_cursor_up();
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::ArrowDown) => {
+                                        card.content.move_cursor_down();
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::Home) => {
+                                        card.content.move_cursor_to_start();
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::End) => {
+                                        card.content.move_cursor_to_end();
+                                    }
+                                    Key::Named(iced::keyboard::key::Named::Escape) => {
+                                        // Exit editing mode
+                                        card.is_editing = false;
+                                        self.editing_card_id = None;
+                                    }
+                                    _ => {}
+                                }
+                                self.dot_grid.clear_cards_cache();
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             Message::StopEditingCard => {
@@ -518,6 +569,7 @@ impl Cards {
             match event {
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
+                Event::Keyboard(keyboard_event) => Some(Message::KeyboardInput(keyboard_event)),
                 _ => None,
             }
         });
@@ -545,97 +597,7 @@ impl Cards {
         // Build the base view with main content
         let mut view: Element<Message> = main_content;
 
-        // Add card editing modal positioned over the card body
-        if let Some(card_id) = self.editing_card_id {
-            if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
-                let screen_x = card.current_position.x + self.canvas_offset.x;
-                let screen_y = card.current_position.y + self.canvas_offset.y;
-
-                let text_color = self.theme.card_text();
-                let card_bg = self.theme.card_background();
-                let current_theme = self.theme;
-
-                // Create text editor for multiline editing with proper cursor visibility
-                let editor = text_editor(&card.content)
-                    .on_action(move |action| Message::CardEditorAction(card_id, action))
-                    .placeholder("Type your markdown here...")
-                    .padding(10.0)
-                    .height(110.0)
-                    .font(iced::Font {
-                        weight: iced::font::Weight::Normal,
-                        ..Default::default()
-                    })
-                    .size(14.0)  // Explicit font size
-                    .line_height(1.5)  // Line height for better readability and cursor visibility
-                    .style(move |_theme: &IcedTheme, status| {
-                        // Theme-aware cursor - black for light theme, white for dark theme
-                        let cursor_color = match current_theme {
-                            Theme::Light => Color::BLACK,
-                            Theme::Dark => Color::WHITE,
-                        };
-
-                        // Theme-aware background
-                        let editor_bg = match current_theme {
-                            Theme::Light => Color::WHITE,
-                            Theme::Dark => Color::from_rgb8(40, 40, 40),
-                        };
-
-                        text_editor::Style {
-                            background: iced::Background::Color(editor_bg),
-                            border: iced::Border {
-                                color: match status {
-                                    text_editor::Status::Focused => Color::from_rgb8(59, 130, 246),
-                                    _ => Color::TRANSPARENT,
-                                },
-                                width: 2.0,
-                                radius: 4.0.into(),
-                            },
-                            icon: cursor_color, // Cursor color - high contrast
-                            placeholder: Color {
-                                r: text_color.r * 0.5,
-                                g: text_color.g * 0.5,
-                                b: text_color.b * 0.5,
-                                a: 0.5,
-                            },
-                            value: text_color,
-                            selection: Color::from_rgba(0.4, 0.6, 1.0, 0.3),
-                        }
-                    });
-
-                // Position editor exactly over the card body (30px down for title bar)
-                let editor_positioned = container(
-                    container(editor)
-                        .width(180.0)
-                        .height(110.0)
-                        .style(move |_theme: &IcedTheme| {
-                            container::Style {
-                                background: Some(iced::Background::Color(card_bg)),
-                                border: Border {
-                                    color: Color::from_rgb8(100, 150, 255),
-                                    width: 2.0,
-                                    radius: 4.0.into(),
-                                },
-                                shadow: Shadow {
-                                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
-                                    offset: Vector::new(0.0, 4.0),
-                                    blur_radius: 8.0,
-                                },
-                                text_color: Some(text_color),
-                            }
-                        })
-                )
-                .width(Length::Shrink)  // Don't fill the screen!
-                .height(Length::Shrink)  // Don't fill the screen!
-                .padding(Padding {
-                    top: screen_y + 30.0, // Position below the title bar
-                    right: 0.0,
-                    bottom: 0.0,
-                    left: screen_x,
-                });
-
-                view = Overlay::new(view, editor_positioned, Color::TRANSPARENT).into();
-            }
-        }
+        // Custom text editor is now rendered directly in canvas, no overlay needed
 
         // Add context menu (before sidebar)
         if let Some(pos) = self.context_menu_position {
