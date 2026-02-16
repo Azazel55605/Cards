@@ -415,18 +415,26 @@ impl Cards {
                             let new_width = (world_pos.x - card.current_position.x).max(Card::MIN_WIDTH);
                             let new_height = (world_pos.y - card.current_position.y).max(Card::MIN_HEIGHT);
 
-                            // Snap to grid
-                            card.width = ((new_width / dot_spacing).round() * dot_spacing).max(Card::MIN_WIDTH);
-                            card.height = ((new_height / dot_spacing).round() * dot_spacing).max(Card::MIN_HEIGHT);
+                            // Snap to grid for target size
+                            let snapped_width = ((new_width / dot_spacing).round() * dot_spacing).max(Card::MIN_WIDTH);
+                            let snapped_height = ((new_height / dot_spacing).round() * dot_spacing).max(Card::MIN_HEIGHT);
+
+                            // ONLY set target - let animation smooth the transition
+                            card.target_width = snapped_width;
+                            card.target_height = snapped_height;
                         }
                         self.dot_grid.clear_cards_cache();
                     }
                     DotGridMessage::CardResizeEnd(card_id) => {
-                        // Final snap to grid
+                        // Final snap to grid with smooth animation
                         let dot_spacing = self.dot_grid.dot_spacing();
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
-                            card.width = ((card.width / dot_spacing).round() * dot_spacing).max(Card::MIN_WIDTH);
-                            card.height = ((card.height / dot_spacing).round() * dot_spacing).max(Card::MIN_HEIGHT);
+                            let final_width = ((card.width / dot_spacing).round() * dot_spacing).max(Card::MIN_WIDTH);
+                            let final_height = ((card.height / dot_spacing).round() * dot_spacing).max(Card::MIN_HEIGHT);
+
+                            // Set target size - animation will smooth the transition
+                            card.target_width = final_width;
+                            card.target_height = final_height;
                         }
                         self.dot_grid.clear_cards_cache();
                     }

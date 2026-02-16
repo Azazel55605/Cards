@@ -8,6 +8,8 @@ pub struct Card {
     pub target_position: Point,
     pub width: f32,
     pub height: f32,
+    pub target_width: f32,
+    pub target_height: f32,
     pub icon: CardIcon,
     pub color: Color,
     pub is_dragging: bool,
@@ -23,6 +25,8 @@ impl Clone for Card {
             target_position: self.target_position,
             width: self.width,
             height: self.height,
+            target_width: self.target_width,
+            target_height: self.target_height,
             icon: self.icon,
             color: self.color,
             is_dragging: self.is_dragging,
@@ -95,6 +99,8 @@ impl Card {
             target_position: position,
             width: Self::MIN_WIDTH,
             height: Self::MIN_HEIGHT,
+            target_width: Self::MIN_WIDTH,
+            target_height: Self::MIN_HEIGHT,
             icon: CardIcon::Default,
             color: Color::from_rgb8(100, 150, 255), // Default blue
             is_dragging: false,
@@ -163,6 +169,7 @@ impl Card {
             return;
         }
 
+        // Animate position
         let distance = ((self.target_position.x - self.current_position.x).powi(2)
                        + (self.target_position.y - self.current_position.y).powi(2)).sqrt();
 
@@ -175,6 +182,23 @@ impl Card {
             self.current_position.y += (self.target_position.y - self.current_position.y) * t;
         } else {
             self.current_position = self.target_position;
+        }
+
+        // Animate size
+        let width_diff = (self.target_width - self.width).abs();
+        let height_diff = (self.target_height - self.height).abs();
+
+        if width_diff > 0.5 || height_diff > 0.5 {
+            // Smooth interpolation with easing for size
+            let speed = 10.0; // Same speed as position for consistency
+            let t = 1.0 - (-speed * delta_time).exp();
+
+            self.width += (self.target_width - self.width) * t;
+            self.height += (self.target_height - self.height) * t;
+        } else {
+            // Snap to target when close enough
+            self.width = self.target_width;
+            self.height = self.target_height;
         }
     }
 }
