@@ -158,8 +158,16 @@ where
                 mouse::Cursor::Unavailable
             };
 
-            // Draw content with clipping to menu bounds
-            renderer.with_layer(menu_bounds, |renderer| {
+            // Draw content with clipping to menu bounds (inset to respect rounded corners)
+            let border_radius = 8.0;
+            let content_clip_bounds = Rectangle {
+                x: menu_bounds.x + border_radius * 0.5,
+                y: menu_bounds.y + border_radius * 0.5,
+                width: menu_bounds.width - border_radius,
+                height: menu_bounds.height - border_radius,
+            };
+
+            renderer.with_layer(content_clip_bounds, |renderer| {
                 renderer.with_translation(
                     Vector::new(menu_bounds.x - full_bounds.x, menu_bounds.y - full_bounds.y),
                     |renderer| {
