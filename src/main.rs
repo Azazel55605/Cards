@@ -183,6 +183,7 @@ struct Cards {
     // Card editing state
     editing_card_id: Option<usize>,
     selected_card_id: Option<usize>,  // Track selected card for toolbar
+    clipboard_text: String,  // Store clipboard content
     // Configuration
     config: Config,
     // Cache SVG handles
@@ -233,6 +234,7 @@ impl Cards {
             card_icon_menu_card_id: None,
             editing_card_id: None,
             selected_card_id: None,
+            clipboard_text: String::new(),
             config,
             icon_menu_left: svg::Handle::from_path("src/icons/menu-left.svg"),
             icon_menu_right: svg::Handle::from_path("src/icons/menu-right.svg"),
@@ -643,125 +645,66 @@ impl Cards {
                                     _ => false
                                 };
 
-                                // If not handled as special key, use text field or character key
+                                // If not handled as special key, check for Ctrl shortcuts first, then text input
                                 if !handled_as_special {
-                                    // CRITICAL: Use the 'text' field if available - it contains the OS-processed character
-                                    // This includes proper keyboard layout, Shift, AltGr, dead keys, etc.
-                                    if let Some(text_char) = text {
-                                        // eprintln!("Text field contains: {:?}", text_char);
-
-                                        // Debug: Check if it's a space
-                                        if text_char == " " {
-                                            // eprintln!("SPACE DETECTED in text field!");
-                                            // eprintln!("Current text length: {}", card.content.text().len());
-                                            // eprintln!("Current cursor position: {}", card.content.cursor_position);
-                                        }
-
-                                        // Check for Ctrl shortcuts
-                                        let is_ctrl_shortcut = modifiers.control() && !modifiers.alt() && match text_char.to_uppercase().as_str() {
-                                            "A" => {
-                                                // eprintln!("-> Executing Select All");
-                                                card.content.select_all();
-                                                true
-                                            }
-                                            "C" => {
-                                                // eprintln!("-> Executing Copy");
-                                                if let Some(text) = card.content.get_selected_text() {
-                                                    // eprintln!("Copied: {}", text);
+                                    // Check for Ctrl shortcuts using the key field (reliable)
+                                    let is_ctrl_shortcut = if modifiers.control() && !modifiers.alt() {
+                                        if let Key::Character(c) = &key {
+                                            match c.to_uppercase().as_str() {
+                                                "A" => {
+                                                    card.content.select_all();
+                                                    true
                                                 }
-                                                true
-                                            }
-                                            "X" => {
-                                                // eprintln!("-> Executing Cut");
-                                                if let Some(text) = card.content.get_selected_text() {
-                                                    // eprintln!("Cut: {}", text);
+                                                "C" => {
+                                                    // Copy selected text to internal clipboard
+                                                    if let Some(text) = card.content.get_selected_text() {
+                                                        self.clipboard_text = text;
+                                                    }
+                                                    true
+                                                }
+                                                "X" => {
+                                                    // Cut: copy to clipboard then delete
+                                                    if let Some(text) = card.content.get_selected_text() {
+                                                        self.clipboard_text = text;
+                                                    }
                                                     card.content.delete_selection();
+                                                    true
                                                 }
-                                                true
+                                                "V" => {
+                                                    // Paste from internal clipboard
+                                                    if !self.clipboard_text.is_empty() {
+                                                        // Delete selection first if any
+                                                        card.content.delete_selection();
+                                                        // Insert clipboard content
+                                                        for ch in self.clipboard_text.chars() {
+                                                            card.content.insert_char(ch);
+                                                        }
+                                                    }
+                                                    true
+                                                }
+                                                _ => false
                                             }
-                                            "V" => {
-                                                // eprintln!("-> Executing Paste");
-                                                true
-                                            }
-                                            _ => false
-                                        };
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    };
 
-                                        if !is_ctrl_shortcut {
-                                            // eprintln!("-> Inserting text from text field: {:?}", text_char);
+                                    // Only insert text if it's not a Ctrl shortcut
+                                    if !is_ctrl_shortcut {
+                                        // Use the 'text' field if available (OS-processed character with layout)
+                                        if let Some(text_char) = text {
                                             for ch in text_char.chars() {
                                                 card.content.insert_char(ch);
                                             }
-
-                                            // Debug: Verify after insertion
-                                            if text_char == " " {
-                                                // eprintln!("After space insertion:");
-                                                // eprintln!("  Text length: {}", card.content.text().len());
-                                                // eprintln!("  Cursor position: {}", card.content.cursor_position);
-                                                // Safe string slicing - take last 10 characters, not bytes
-                                                let text = card.content.text();
-                                                let last_chars: String = text.chars().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect();
-                                                // eprintln!("  Last 10 chars: {:?}", last_chars);
+                                        } else if let Key::Character(c) = &key {
+                                            // No text field - use character key directly
+                                            for ch in c.chars() {
+                                                card.content.insert_char(ch);
                                             }
-                                        } else {
-                                            // eprintln!("-> Skipped (was Ctrl shortcut)");
-                                        }
-                                    } else {
-                                        // eprintln!("No text field - checking Character key");
-
-                                        match key {
-                                            Key::Character(ref c) => {
-                                                // eprintln!("Character string: {:?} (length: {})", c, c.len());
-                                                for (i, ch) in c.chars().enumerate() {
-                                                    // eprintln!("  Char {}: '{}' (U+{:04X})", i, ch, ch as u32);
-                                                }
-
-                                                // Check for Ctrl shortcuts (without AltGr) - these don't insert characters
-                                                let is_ctrl_shortcut = modifiers.control() && !modifiers.alt() && match c.to_uppercase().as_str() {
-                                                    "A" => {
-                                                        // eprintln!("-> Executing Select All");
-                                                        card.content.select_all();
-                                                        true
-                                                    }
-                                                    "C" => {
-                                                        // eprintln!("-> Executing Copy");
-                                                        if let Some(text) = card.content.get_selected_text() {
-                                                            // eprintln!("Copied: {}", text);
-                                                        }
-                                                        true
-                                                    }
-                                                    "X" => {
-                                                        // eprintln!("-> Executing Cut");
-                                                        if let Some(text) = card.content.get_selected_text() {
-                                                            // eprintln!("Cut: {}", text);
-                                                            card.content.delete_selection();
-                                                        }
-                                                        true
-                                                    }
-                                                    "V" => {
-                                                        // eprintln!("-> Executing Paste");
-                                                        true
-                                                    }
-                                                    _ => false
-                                                };
-
-                                                if !is_ctrl_shortcut {
-                                                    // eprintln!("-> Inserting character(s): {:?}", c);
-                                                    // Insert the character exactly as Iced provides it
-                                                    // Iced should already apply OS keyboard layout + modifiers
-                                                    for ch in c.chars() {
-                                                        card.content.insert_char(ch);
-                                                    }
-                                                } else {
-                                                    // eprintln!("-> Skipped (was Ctrl shortcut)");
-                                                }
-                                            }
-                                            Key::Named(iced::keyboard::key::Named::Space) => {
-                                                // eprintln!("-> Space key");
-                                                card.content.insert_char(' ');
-                                            }
-                                            _ => {
-                                                // eprintln!("-> Unknown/unhandled key");
-                                            }
+                                        } else if matches!(key, Key::Named(iced::keyboard::key::Named::Space)) {
+                                            card.content.insert_char(' ');
                                         }
                                     }
                                 }
@@ -889,7 +832,12 @@ impl Cards {
         // Always tick for card animations
         let tick = time::every(Duration::from_millis(16)).map(Message::Tick);
 
-        let events = event::listen_with(|event, _status, _id| {
+        let events = event::listen_with(|event, status, _id| {
+            // Only process events that weren't already captured by widgets
+            if status == iced::event::Status::Captured {
+                return None;
+            }
+
             match event {
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
