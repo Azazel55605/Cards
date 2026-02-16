@@ -1066,7 +1066,7 @@ impl Program<DotGridMessage> for &DotGrid {
                     };
 
                     if resize_handle_bounds.contains(pos) {
-                        return mouse::Interaction::Grabbing;
+                        return mouse::Interaction::ResizingDiagonallyDown;
                     }
 
                     // Check top bar for dragging
@@ -1099,7 +1099,7 @@ impl Program<DotGridMessage> for &DotGrid {
 
             // If resizing a card, show resize cursor
             if state.resizing_card.is_some() {
-                return mouse::Interaction::Grabbing;
+                return mouse::Interaction::ResizingDiagonallyDown;
             }
         }
 
