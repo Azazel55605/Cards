@@ -166,7 +166,7 @@ where
                 width: menu_bounds.width - border_radius,
                 height: menu_bounds.height - border_radius,
             };
-
+            
             renderer.with_layer(content_clip_bounds, |renderer| {
                 renderer.with_translation(
                     Vector::new(menu_bounds.x - full_bounds.x, menu_bounds.y - full_bounds.y),

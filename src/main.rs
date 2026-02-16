@@ -537,22 +537,22 @@ impl Cards {
 
                         match keyboard_event {
                             iced::keyboard::Event::KeyPressed { key, modifiers, text, .. } => {
-                                eprintln!("=== KEY PRESSED ===");
-                                eprintln!("Key: {:?}", key);
-                                eprintln!("Text field: {:?}", text);
-                                eprintln!("Modifiers - Shift: {}, Ctrl: {}, Alt: {}, Logo: {}",
-                                    modifiers.shift(), modifiers.control(), modifiers.alt(), modifiers.logo());
+                                //eprintln!("=== KEY PRESSED ===");
+                                //eprintln!("Key: {:?}", key);
+                                //eprintln!("Text field: {:?}", text);
+                                //eprintln!("Modifiers - Shift: {}, Ctrl: {}, Alt: {}, Logo: {}",
+                                //    modifiers.shift(), modifiers.control(), modifiers.alt(), modifiers.logo());
 
                                 // Handle special Named keys FIRST (before text field)
                                 // These should trigger actions, not insert characters
                                 let handled_as_special = match key {
                                     Key::Named(iced::keyboard::key::Named::Enter) => {
-                                        eprintln!("-> Enter key");
+                                        //eprintln!("-> Enter key");
                                         card.content.insert_newline();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Backspace) => {
-                                        eprintln!("-> Backspace (Ctrl: {})", modifiers.control());
+                                        //eprintln!("-> Backspace (Ctrl: {})", modifiers.control());
                                         if modifiers.control() {
                                             card.content.delete_word_backward();
                                         } else {
@@ -561,7 +561,7 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Delete) => {
-                                        eprintln!("-> Delete (Ctrl: {})", modifiers.control());
+                                        // eprintln!("-> Delete (Ctrl: {})", modifiers.control());
                                         if modifiers.control() {
                                             card.content.delete_word_forward();
                                         } else {
@@ -570,27 +570,27 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowLeft) => {
-                                        eprintln!("-> ArrowLeft (Shift: {})", modifiers.shift());
+                                        // eprintln!("-> ArrowLeft (Shift: {})", modifiers.shift());
                                         card.content.move_cursor_left(modifiers.shift());
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowRight) => {
-                                        eprintln!("-> ArrowRight (Shift: {})", modifiers.shift());
+                                        // eprintln!("-> ArrowRight (Shift: {})", modifiers.shift());
                                         card.content.move_cursor_right(modifiers.shift());
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowUp) => {
-                                        eprintln!("-> ArrowUp");
+                                        // eprintln!("-> ArrowUp");
                                         card.content.move_cursor_up();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowDown) => {
-                                        eprintln!("-> ArrowDown");
+                                        // eprintln!("-> ArrowDown");
                                         card.content.move_cursor_down();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Home) => {
-                                        eprintln!("-> Home");
+                                        // eprintln!("-> Home");
                                         if modifiers.control() {
                                             card.content.move_cursor_to_start();
                                         } else {
@@ -599,7 +599,7 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::End) => {
-                                        eprintln!("-> End");
+                                        // eprintln!("-> End");
                                         if modifiers.control() {
                                             card.content.move_cursor_to_end();
                                         } else {
@@ -608,12 +608,12 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Tab) => {
-                                        eprintln!("-> Tab key");
+                                        // eprintln!("-> Tab key");
                                         card.content.insert_char('\t');
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Escape) => {
-                                        eprintln!("-> Escape - exiting edit mode");
+                                        // eprintln!("-> Escape - exiting edit mode");
                                         card.is_editing = false;
                                         self.editing_card_id = None;
                                         true
@@ -626,119 +626,119 @@ impl Cards {
                                     // CRITICAL: Use the 'text' field if available - it contains the OS-processed character
                                     // This includes proper keyboard layout, Shift, AltGr, dead keys, etc.
                                     if let Some(text_char) = text {
-                                        eprintln!("Text field contains: {:?}", text_char);
+                                        // eprintln!("Text field contains: {:?}", text_char);
 
                                         // Debug: Check if it's a space
                                         if text_char == " " {
-                                            eprintln!("SPACE DETECTED in text field!");
-                                            eprintln!("Current text length: {}", card.content.text().len());
-                                            eprintln!("Current cursor position: {}", card.content.cursor_position);
+                                            // eprintln!("SPACE DETECTED in text field!");
+                                            // eprintln!("Current text length: {}", card.content.text().len());
+                                            // eprintln!("Current cursor position: {}", card.content.cursor_position);
                                         }
 
                                         // Check for Ctrl shortcuts
                                         let is_ctrl_shortcut = modifiers.control() && !modifiers.alt() && match text_char.to_uppercase().as_str() {
                                             "A" => {
-                                                eprintln!("-> Executing Select All");
+                                                // eprintln!("-> Executing Select All");
                                                 card.content.select_all();
                                                 true
                                             }
                                             "C" => {
-                                                eprintln!("-> Executing Copy");
+                                                // eprintln!("-> Executing Copy");
                                                 if let Some(text) = card.content.get_selected_text() {
-                                                    eprintln!("Copied: {}", text);
+                                                    // eprintln!("Copied: {}", text);
                                                 }
                                                 true
                                             }
                                             "X" => {
-                                                eprintln!("-> Executing Cut");
+                                                // eprintln!("-> Executing Cut");
                                                 if let Some(text) = card.content.get_selected_text() {
-                                                    eprintln!("Cut: {}", text);
+                                                    // eprintln!("Cut: {}", text);
                                                     card.content.delete_selection();
                                                 }
                                                 true
                                             }
                                             "V" => {
-                                                eprintln!("-> Executing Paste");
+                                                // eprintln!("-> Executing Paste");
                                                 true
                                             }
                                             _ => false
                                         };
 
                                         if !is_ctrl_shortcut {
-                                            eprintln!("-> Inserting text from text field: {:?}", text_char);
+                                            // eprintln!("-> Inserting text from text field: {:?}", text_char);
                                             for ch in text_char.chars() {
                                                 card.content.insert_char(ch);
                                             }
 
                                             // Debug: Verify after insertion
                                             if text_char == " " {
-                                                eprintln!("After space insertion:");
-                                                eprintln!("  Text length: {}", card.content.text().len());
-                                                eprintln!("  Cursor position: {}", card.content.cursor_position);
+                                                // eprintln!("After space insertion:");
+                                                // eprintln!("  Text length: {}", card.content.text().len());
+                                                // eprintln!("  Cursor position: {}", card.content.cursor_position);
                                                 // Safe string slicing - take last 10 characters, not bytes
                                                 let text = card.content.text();
                                                 let last_chars: String = text.chars().rev().take(10).collect::<Vec<_>>().into_iter().rev().collect();
-                                                eprintln!("  Last 10 chars: {:?}", last_chars);
+                                                // eprintln!("  Last 10 chars: {:?}", last_chars);
                                             }
                                         } else {
-                                            eprintln!("-> Skipped (was Ctrl shortcut)");
+                                            // eprintln!("-> Skipped (was Ctrl shortcut)");
                                         }
                                     } else {
-                                        eprintln!("No text field - checking Character key");
+                                        // eprintln!("No text field - checking Character key");
 
                                         match key {
                                             Key::Character(ref c) => {
-                                                eprintln!("Character string: {:?} (length: {})", c, c.len());
+                                                // eprintln!("Character string: {:?} (length: {})", c, c.len());
                                                 for (i, ch) in c.chars().enumerate() {
-                                                    eprintln!("  Char {}: '{}' (U+{:04X})", i, ch, ch as u32);
+                                                    // eprintln!("  Char {}: '{}' (U+{:04X})", i, ch, ch as u32);
                                                 }
 
                                                 // Check for Ctrl shortcuts (without AltGr) - these don't insert characters
                                                 let is_ctrl_shortcut = modifiers.control() && !modifiers.alt() && match c.to_uppercase().as_str() {
                                                     "A" => {
-                                                        eprintln!("-> Executing Select All");
+                                                        // eprintln!("-> Executing Select All");
                                                         card.content.select_all();
                                                         true
                                                     }
                                                     "C" => {
-                                                        eprintln!("-> Executing Copy");
+                                                        // eprintln!("-> Executing Copy");
                                                         if let Some(text) = card.content.get_selected_text() {
-                                                            eprintln!("Copied: {}", text);
+                                                            // eprintln!("Copied: {}", text);
                                                         }
                                                         true
                                                     }
                                                     "X" => {
-                                                        eprintln!("-> Executing Cut");
+                                                        // eprintln!("-> Executing Cut");
                                                         if let Some(text) = card.content.get_selected_text() {
-                                                            eprintln!("Cut: {}", text);
+                                                            // eprintln!("Cut: {}", text);
                                                             card.content.delete_selection();
                                                         }
                                                         true
                                                     }
                                                     "V" => {
-                                                        eprintln!("-> Executing Paste");
+                                                        // eprintln!("-> Executing Paste");
                                                         true
                                                     }
                                                     _ => false
                                                 };
 
                                                 if !is_ctrl_shortcut {
-                                                    eprintln!("-> Inserting character(s): {:?}", c);
+                                                    // eprintln!("-> Inserting character(s): {:?}", c);
                                                     // Insert the character exactly as Iced provides it
                                                     // Iced should already apply OS keyboard layout + modifiers
                                                     for ch in c.chars() {
                                                         card.content.insert_char(ch);
                                                     }
                                                 } else {
-                                                    eprintln!("-> Skipped (was Ctrl shortcut)");
+                                                    // eprintln!("-> Skipped (was Ctrl shortcut)");
                                                 }
                                             }
                                             Key::Named(iced::keyboard::key::Named::Space) => {
-                                                eprintln!("-> Space key");
+                                                // eprintln!("-> Space key");
                                                 card.content.insert_char(' ');
                                             }
                                             _ => {
-                                                eprintln!("-> Unknown/unhandled key");
+                                                // eprintln!("-> Unknown/unhandled key");
                                             }
                                         }
                                     }
@@ -754,7 +754,7 @@ impl Cards {
                                 };
                                 card.content.update_scroll(card_bounds);
                                 self.dot_grid.clear_cards_cache();
-                                eprintln!("Cache cleared\n");
+                                // eprintln!("Cache cleared\n");
                             }
                             _ => {}
                         }

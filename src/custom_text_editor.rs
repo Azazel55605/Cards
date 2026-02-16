@@ -512,7 +512,7 @@ impl CustomTextEditor {
             // Process character by character to preserve ALL spaces
             let mut line = String::new();
             let mut line_start_pos = original_pos;
-
+            
             for ch in paragraph.chars() {
                 // Check if adding this character would exceed max width
                 if line.chars().count() >= max_chars {
@@ -520,12 +520,12 @@ impl CustomTextEditor {
                     let line_end_pos = line_start_pos + line.len();
                     position_map.push((wrapped_lines.len(), 0, line_start_pos, line_end_pos));
                     wrapped_lines.push(line.clone());
-
+                    
                     // Start new line
                     line.clear();
                     line_start_pos = line_end_pos;
                 }
-
+                
                 // Add the character (including spaces!)
                 line.push(ch);
             }

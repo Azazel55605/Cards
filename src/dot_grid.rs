@@ -1066,7 +1066,7 @@ impl Program<DotGridMessage> for &DotGrid {
                     };
 
                     if resize_handle_bounds.contains(pos) {
-                        return mouse::Interaction::ResizingDiagonallyDown;
+                        return mouse::Interaction::Grabbing;
                     }
 
                     // Check top bar for dragging
