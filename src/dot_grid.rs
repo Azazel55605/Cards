@@ -1,17 +1,34 @@
-use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder, Text};
-use iced::advanced::layout::Layout;
-use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector, Size};
-use iced::alignment;
+use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder};
+use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector};
 use crate::card::Card;
 use crate::markdown::MarkdownRenderer;
 
-#[derive(Default, Clone)]
 pub struct DotGridState {
     last_cursor_pos: Option<Point>,
     is_panning: bool,
     pan_start: Option<Point>,
     dragging_card: Option<usize>,
     drag_offset: Option<Point>, // Changed from drag_start_offset to drag_offset
+    resizing_card: Option<usize>,
+    resize_start_size: Option<(f32, f32)>, // (width, height)
+    resize_start_pos: Option<Point>,
+    hovered_card: Option<usize>, // NEW: Track which card is hovered
+}
+
+impl Default for DotGridState {
+    fn default() -> Self {
+        Self {
+            last_cursor_pos: None,
+            is_panning: false,
+            pan_start: None,
+            dragging_card: None,
+            drag_offset: None,
+            resizing_card: None,
+            resize_start_size: None,
+            resize_start_pos: None,
+            hovered_card: None,
+        }
+    }
 }
 
 pub struct DotGrid {
@@ -193,7 +210,7 @@ impl DotGrid {
         }
     }
 
-    fn draw_cards(&self, frame: &mut Frame, _bounds: Rectangle) {
+    fn draw_cards(&self, frame: &mut Frame, _bounds: Rectangle, hovered_card: Option<usize>) {
         for card in &self.cards {
             let screen_x = card.current_position.x + self.offset.x;
             let screen_y = card.current_position.y + self.offset.y;
@@ -240,15 +257,153 @@ impl DotGrid {
                 ),
             );
 
-            // Draw icon with card's custom color
+            // Draw icon with card's custom color based on icon type
             let icon_size = 20.0;
             let icon_x = card_rect.x + 5.0;
             let icon_y = card_rect.y + 5.0;
+            let icon_center = Point::new(icon_x + icon_size/2.0, icon_y + icon_size/2.0);
 
-            frame.fill(
-                &Path::circle(Point::new(icon_x + icon_size/2.0, icon_y + icon_size/2.0), icon_size/2.0),
-                card.color,
-            );
+            use crate::card::CardIcon;
+            match card.icon {
+                CardIcon::Circle | CardIcon::Default => {
+                    // Circle
+                    frame.fill(
+                        &Path::circle(icon_center, icon_size/2.0),
+                        card.color,
+                    );
+                }
+                CardIcon::Square => {
+                    // Square
+                    frame.fill(
+                        &Path::rectangle(Point::new(icon_x, icon_y), iced::Size::new(icon_size, icon_size)),
+                        card.color,
+                    );
+                }
+                CardIcon::Triangle => {
+                    // Triangle pointing up
+                    let mut builder = Builder::new();
+                    builder.move_to(Point::new(icon_x + icon_size/2.0, icon_y)); // Top
+                    builder.line_to(Point::new(icon_x, icon_y + icon_size)); // Bottom left
+                    builder.line_to(Point::new(icon_x + icon_size, icon_y + icon_size)); // Bottom right
+                    builder.close();
+                    frame.fill(&builder.build(), card.color);
+                }
+                CardIcon::Star => {
+                    // 5-pointed star
+                    let mut builder = Builder::new();
+                    let outer_radius = icon_size / 2.0;
+                    let inner_radius = outer_radius * 0.4;
+                    for i in 0..10 {
+                        let angle = (i as f32 * std::f32::consts::PI / 5.0) - std::f32::consts::PI / 2.0;
+                        let radius = if i % 2 == 0 { outer_radius } else { inner_radius };
+                        let x = icon_center.x + radius * angle.cos();
+                        let y = icon_center.y + radius * angle.sin();
+                        if i == 0 {
+                            builder.move_to(Point::new(x, y));
+                        } else {
+                            builder.line_to(Point::new(x, y));
+                        }
+                    }
+                    builder.close();
+                    frame.fill(&builder.build(), card.color);
+                }
+                CardIcon::Heart => {
+                    // Simple heart shape
+                    let mut builder = Builder::new();
+                    let w = icon_size;
+                    let h = icon_size;
+                    builder.move_to(Point::new(icon_x + w/2.0, icon_y + h)); // Bottom point
+                    builder.bezier_curve_to(
+                        Point::new(icon_x, icon_y + h * 0.6),
+                        Point::new(icon_x, icon_y + h * 0.2),
+                        Point::new(icon_x + w/4.0, icon_y),
+                    );
+                    builder.bezier_curve_to(
+                        Point::new(icon_x + w/2.0, icon_y + h * 0.2),
+                        Point::new(icon_x + w/2.0, icon_y + h * 0.2),
+                        Point::new(icon_x + w/2.0, icon_y + h * 0.2),
+                    );
+                    builder.bezier_curve_to(
+                        Point::new(icon_x + w * 3.0/4.0, icon_y),
+                        Point::new(icon_x + w, icon_y + h * 0.2),
+                        Point::new(icon_x + w, icon_y + h * 0.6),
+                    );
+                    builder.bezier_curve_to(
+                        Point::new(icon_x + w/2.0, icon_y + h),
+                        Point::new(icon_x + w/2.0, icon_y + h),
+                        Point::new(icon_x + w/2.0, icon_y + h),
+                    );
+                    builder.close();
+                    frame.fill(&builder.build(), card.color);
+                }
+                CardIcon::Check => {
+                    // Checkmark
+                    let stroke_width = 2.5;
+                    let mut builder = Builder::new();
+                    builder.move_to(Point::new(icon_x + icon_size * 0.2, icon_y + icon_size * 0.5));
+                    builder.line_to(Point::new(icon_x + icon_size * 0.4, icon_y + icon_size * 0.75));
+                    builder.line_to(Point::new(icon_x + icon_size * 0.8, icon_y + icon_size * 0.25));
+                    frame.stroke(&builder.build(), Stroke::default().with_color(card.color).with_width(stroke_width));
+                }
+                CardIcon::Cross => {
+                    // X mark
+                    let stroke_width = 2.5;
+                    let padding = icon_size * 0.2;
+                    frame.stroke(
+                        &Path::line(
+                            Point::new(icon_x + padding, icon_y + padding),
+                            Point::new(icon_x + icon_size - padding, icon_y + icon_size - padding)
+                        ),
+                        Stroke::default().with_color(card.color).with_width(stroke_width)
+                    );
+                    frame.stroke(
+                        &Path::line(
+                            Point::new(icon_x + icon_size - padding, icon_y + padding),
+                            Point::new(icon_x + padding, icon_y + icon_size - padding)
+                        ),
+                        Stroke::default().with_color(card.color).with_width(stroke_width)
+                    );
+                }
+                CardIcon::Plus => {
+                    // Plus sign
+                    let stroke_width = 2.5;
+                    let padding = icon_size * 0.2;
+                    frame.stroke(
+                        &Path::line(
+                            Point::new(icon_x + icon_size/2.0, icon_y + padding),
+                            Point::new(icon_x + icon_size/2.0, icon_y + icon_size - padding)
+                        ),
+                        Stroke::default().with_color(card.color).with_width(stroke_width)
+                    );
+                    frame.stroke(
+                        &Path::line(
+                            Point::new(icon_x + padding, icon_y + icon_size/2.0),
+                            Point::new(icon_x + icon_size - padding, icon_y + icon_size/2.0)
+                        ),
+                        Stroke::default().with_color(card.color).with_width(stroke_width)
+                    );
+                }
+                CardIcon::Minus => {
+                    // Minus sign
+                    let stroke_width = 2.5;
+                    let padding = icon_size * 0.2;
+                    frame.stroke(
+                        &Path::line(
+                            Point::new(icon_x + padding, icon_y + icon_size/2.0),
+                            Point::new(icon_x + icon_size - padding, icon_y + icon_size/2.0)
+                        ),
+                        Stroke::default().with_color(card.color).with_width(stroke_width)
+                    );
+                }
+                CardIcon::Question => {
+                    // Question mark - draw as circle with ? (simplified as circle for now)
+                    frame.fill(&Path::circle(icon_center, icon_size/2.0), card.color);
+                }
+                CardIcon::Exclamation => {
+                    // Exclamation mark - draw as circle with ! (simplified as circle for now)
+                    frame.fill(&Path::circle(icon_center, icon_size/2.0), card.color);
+                }
+            }
 
             // Draw content or custom editor
             let content_text = card.content.text();
@@ -269,12 +424,21 @@ impl DotGrid {
                     Color::BLACK
                 };
                 
+                // Selection color based on theme
+                let selection_color = if self.card_text.r > 0.5 {
+                    // Dark mode - use light grey/white with transparency
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.3)
+                } else {
+                    // Light mode - use dark grey with transparency
+                    Color::from_rgba(0.5, 0.5, 0.5, 0.3)
+                };
+
                 card.content.render(
                     frame,
                     editor_bounds,
                     self.card_text,
                     cursor_color,
-                    Color::from_rgba(0.4, 0.6, 1.0, 0.3),
+                    selection_color,
                 );
             } else if !content_text.is_empty() {
                 // Render as markdown when not editing
@@ -286,14 +450,39 @@ impl DotGrid {
                 renderer.render(frame, &content_text, Point::new(text_x, text_y));
             }
 
-            // Draw editing indicator (blue border when editing)
+            // Draw editing indicator (use card's color for border when editing)
             if card.is_editing {
                 frame.stroke(
                     &rounded_rectangle(card_rect, corner_radius),
                     Stroke::default()
-                        .with_color(Color::from_rgb8(100, 150, 255))
-                        .with_width(2.0),
+                        .with_color(card.color)
+                        .with_width(3.0),
                 );
+            }
+
+            // Draw resize handle when editing OR hovering
+            let show_resize_handle = card.is_editing || hovered_card == Some(card.id);
+            if show_resize_handle {
+                let handle_size = 16.0;
+                let handle_x = card_rect.x + card_rect.width - handle_size;
+                let handle_y = card_rect.y + card_rect.height - handle_size;
+
+                // Draw resize handle background
+                frame.fill(
+                    &Path::rectangle(Point::new(handle_x, handle_y), iced::Size::new(handle_size, handle_size)),
+                    card.color,
+                );
+
+                // Draw resize grip lines
+                let grip_color = if self.card_text.r > 0.5 { Color::BLACK } else { Color::WHITE };
+                for i in 0..3 {
+                    let offset = (i as f32 * 4.0) + 4.0;
+                    let line = Path::line(
+                        Point::new(handle_x + offset, handle_y + handle_size - 2.0),
+                        Point::new(handle_x + handle_size - 2.0, handle_y + offset),
+                    );
+                    frame.stroke(&line, Stroke::default().with_color(grip_color).with_width(1.5));
+                }
             }
         }
     }
@@ -408,6 +597,9 @@ pub enum DotGridMessage {
     CardLeftClickBody(usize),
     CardDrag(usize, Point, Point),
     CardDrop(usize),
+    CardResizeStart(usize, Point),
+    CardResize(usize, Point),
+    CardResizeEnd(usize),
 }
 
 impl Program<DotGridMessage> for &DotGrid {
@@ -475,14 +667,7 @@ impl Program<DotGridMessage> for &DotGrid {
                                         };
 
                                         if !icon_bounds.contains(pos) {
-                                            // If card is being edited, stop editing instead of dragging
-                                            if card.is_editing {
-                                                return (
-                                                    iced::widget::canvas::event::Status::Ignored,
-                                                    None,
-                                                );
-                                            }
-
+                                            // Allow dragging regardless of editing state
                                             state.dragging_card = Some(card.id);
                                             state.drag_offset = Some(Point::new(
                                                 pos.x - screen_bounds.x,
@@ -494,8 +679,26 @@ impl Program<DotGridMessage> for &DotGrid {
                                             );
                                         }
                                     } else {
-                                        // Clicked on card body
-                                        // If card is being edited, ignore the click so it passes to the overlay
+                                        // Check if clicking on resize handle (always available, not just when editing)
+                                        let handle_size = 16.0;
+                                        let resize_handle_bounds = Rectangle {
+                                            x: screen_bounds.x + screen_bounds.width - handle_size,
+                                            y: screen_bounds.y + screen_bounds.height - handle_size,
+                                            width: handle_size,
+                                            height: handle_size,
+                                        };
+
+                                        if resize_handle_bounds.contains(pos) {
+                                            state.resizing_card = Some(card.id);
+                                            state.resize_start_size = Some((card.width, card.height));
+                                            state.resize_start_pos = Some(pos);
+                                            return (
+                                                iced::widget::canvas::event::Status::Captured,
+                                                Some(DotGridMessage::CardResizeStart(card.id, pos)),
+                                            );
+                                        }
+
+                                        // If editing, ignore click so text editor gets it
                                         if card.is_editing {
                                             return (
                                                 iced::widget::canvas::event::Status::Ignored,
@@ -503,7 +706,7 @@ impl Program<DotGridMessage> for &DotGrid {
                                             );
                                         }
 
-                                        // Otherwise, start editing
+                                        // Clicked on card body - start editing
                                         return (
                                             iced::widget::canvas::event::Status::Captured,
                                             Some(DotGridMessage::CardLeftClickBody(card.id)),
@@ -524,6 +727,16 @@ impl Program<DotGridMessage> for &DotGrid {
                         }
                     }
                     mouse::Event::ButtonReleased(mouse::Button::Left) => {
+                        if let Some(card_id) = state.resizing_card {
+                            state.resizing_card = None;
+                            state.resize_start_size = None;
+                            state.resize_start_pos = None;
+                            return (
+                                iced::widget::canvas::event::Status::Captured,
+                                Some(DotGridMessage::CardResizeEnd(card_id)),
+                            );
+                        }
+
                         if let Some(card_id) = state.dragging_card {
                             state.dragging_card = None;
                             state.drag_offset = None;
@@ -582,6 +795,13 @@ impl Program<DotGridMessage> for &DotGrid {
                                     Some(DotGridMessage::Pan(delta)),
                                 );
                             }
+                        } else if let Some(card_id) = state.resizing_card {
+                            if let Some(pos) = current_pos {
+                                return (
+                                    iced::widget::canvas::event::Status::Captured,
+                                    Some(DotGridMessage::CardResize(card_id, pos)),
+                                );
+                            }
                         } else if let Some(card_id) = state.dragging_card {
                             if let Some(pos) = current_pos {
                                 return (
@@ -609,6 +829,35 @@ impl Program<DotGridMessage> for &DotGrid {
         }
 
         state.last_cursor_pos = current_pos;
+
+        // Update hovered card for resize handle display
+        if let Some(pos) = current_pos {
+            let mut new_hovered = None;
+            for card in &self.cards {
+                let screen_bounds = Rectangle {
+                    x: card.current_position.x + self.offset.x,
+                    y: card.current_position.y + self.offset.y,
+                    width: card.width,
+                    height: card.height,
+                };
+
+                if screen_bounds.contains(pos) {
+                    new_hovered = Some(card.id);
+                    break;
+                }
+            }
+
+            if state.hovered_card != new_hovered {
+                state.hovered_card = new_hovered;
+                self.cards_cache.clear(); // Force redraw to show/hide resize handle
+            }
+        } else {
+            if state.hovered_card.is_some() {
+                state.hovered_card = None;
+                self.cards_cache.clear();
+            }
+        }
+
         (iced::widget::canvas::event::Status::Ignored, None)
     }
 
@@ -627,8 +876,9 @@ impl Program<DotGridMessage> for &DotGrid {
 
         // If effect is disabled, just return static layer and draw cards on top
         if !self.effect_enabled {
+            let hovered = state.hovered_card;
             let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-                self.draw_cards(frame, bounds);
+                self.draw_cards(frame, bounds, hovered);
             });
             return vec![static_layer, cards_layer];
         }
@@ -637,8 +887,9 @@ impl Program<DotGridMessage> for &DotGrid {
 
         // If no mouse in bounds, just return static and cards layers
         if local_mouse.is_none() {
+            let hovered = state.hovered_card;
             let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-                self.draw_cards(frame, bounds);
+                self.draw_cards(frame, bounds, hovered);
             });
             return vec![static_layer, cards_layer];
         }
@@ -666,8 +917,9 @@ impl Program<DotGridMessage> for &DotGrid {
         let max_row = (mouse_row + affect_range).min(rows - 1);
 
         if max_col < min_col || max_row < min_row {
+            let hovered = state.hovered_card;
             let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-                self.draw_cards(frame, bounds);
+                self.draw_cards(frame, bounds, hovered);
             });
             return vec![static_layer, cards_layer];
         }
@@ -779,8 +1031,9 @@ impl Program<DotGridMessage> for &DotGrid {
         }
 
         // Draw cards layer LAST so they appear on top
+        let hovered = state.hovered_card;
         let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-            self.draw_cards(frame, bounds);
+            self.draw_cards(frame, bounds, hovered);
         });
 
         vec![static_layer, dynamic_frame.into_geometry(), cards_layer]
@@ -793,7 +1046,7 @@ impl Program<DotGridMessage> for &DotGrid {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         if let Some(pos) = cursor.position_in(bounds) {
-            // Check if hovering over a card's top bar (excluding icon)
+            // Check if hovering over resize handle
             for card in &self.cards {
                 let screen_bounds = Rectangle {
                     x: card.current_position.x + self.offset.x,
@@ -803,6 +1056,20 @@ impl Program<DotGridMessage> for &DotGrid {
                 };
 
                 if screen_bounds.contains(pos) {
+                    // Check resize handle first
+                    let handle_size = 16.0;
+                    let resize_handle_bounds = Rectangle {
+                        x: screen_bounds.x + screen_bounds.width - handle_size,
+                        y: screen_bounds.y + screen_bounds.height - handle_size,
+                        width: handle_size,
+                        height: handle_size,
+                    };
+
+                    if resize_handle_bounds.contains(pos) {
+                        return mouse::Interaction::ResizingDiagonallyDown;
+                    }
+
+                    // Check top bar for dragging
                     let top_bar_bounds = Rectangle {
                         x: screen_bounds.x,
                         y: screen_bounds.y,
@@ -827,6 +1094,11 @@ impl Program<DotGridMessage> for &DotGrid {
 
             // If dragging a card, show grabbing cursor
             if state.dragging_card.is_some() {
+                return mouse::Interaction::Grabbing;
+            }
+
+            // If resizing a card, show resize cursor
+            if state.resizing_card.is_some() {
                 return mouse::Interaction::Grabbing;
             }
         }

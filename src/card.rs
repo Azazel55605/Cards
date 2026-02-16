@@ -39,6 +39,13 @@ pub enum CardIcon {
     Heart,
     Circle,
     Square,
+    Triangle,
+    Check,
+    Cross,
+    Question,
+    Exclamation,
+    Plus,
+    Minus,
 }
 
 impl CardIcon {
@@ -49,22 +56,45 @@ impl CardIcon {
             CardIcon::Heart => "src/icons/heart.svg",
             CardIcon::Circle => "src/icons/circle.svg",
             CardIcon::Square => "src/icons/square.svg",
+            CardIcon::Triangle => "src/icons/triangle.svg",
+            CardIcon::Check => "src/icons/check.svg",
+            CardIcon::Cross => "src/icons/cross.svg",
+            CardIcon::Question => "src/icons/question.svg",
+            CardIcon::Exclamation => "src/icons/exclamation.svg",
+            CardIcon::Plus => "src/icons/plus.svg",
+            CardIcon::Minus => "src/icons/minus.svg",
         }
     }
 
     pub fn all() -> &'static [CardIcon] {
-        &[CardIcon::Default, CardIcon::Star, CardIcon::Heart, CardIcon::Circle, CardIcon::Square]
+        &[
+            CardIcon::Default,
+            CardIcon::Star,
+            CardIcon::Heart,
+            CardIcon::Circle,
+            CardIcon::Square,
+            CardIcon::Triangle,
+            CardIcon::Check,
+            CardIcon::Cross,
+            CardIcon::Question,
+            CardIcon::Exclamation,
+            CardIcon::Plus,
+            CardIcon::Minus,
+        ]
     }
 }
 
 impl Card {
+    pub const MIN_WIDTH: f32 = 200.0;
+    pub const MIN_HEIGHT: f32 = 150.0;
+
     pub fn new(id: usize, position: Point) -> Self {
         Self {
             id,
             current_position: position,
             target_position: position,
-            width: 200.0,
-            height: 150.0,
+            width: Self::MIN_WIDTH,
+            height: Self::MIN_HEIGHT,
             icon: CardIcon::Default,
             color: Color::from_rgb8(100, 150, 255), // Default blue
             is_dragging: false,
@@ -106,6 +136,16 @@ impl Card {
             y: self.current_position.y + 30.0, // Below the top bar
             width: self.width,
             height: self.height - 30.0,
+        }
+    }
+
+    pub fn resize_handle_bounds(&self) -> Rectangle {
+        let handle_size = 16.0;
+        Rectangle {
+            x: self.current_position.x + self.width - handle_size,
+            y: self.current_position.y + self.height - handle_size,
+            width: handle_size,
+            height: handle_size,
         }
     }
 

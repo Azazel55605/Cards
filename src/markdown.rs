@@ -181,8 +181,29 @@ impl MarkdownRenderer {
                         }
                     } else {
                         // Word wrapping for normal text
+                        let max_chars = ((self.max_width / (current_size * 0.6)).floor() as usize).max(1);
                         let words: Vec<&str> = text.split_whitespace().collect();
+                        
                         for word in words {
+                            // Check if word is too long and needs breaking
+                            if word.len() > max_chars {
+                                // Flush current line first
+                                if !current_line.is_empty() {
+                                    self.render_line(frame, &current_line, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
+                                    current_y += line_height;
+                                    current_line.clear();
+                                }
+                                
+                                // Break long word into chunks
+                                for chunk in word.as_bytes().chunks(max_chars) {
+                                    if let Ok(chunk_str) = std::str::from_utf8(chunk) {
+                                        self.render_line(frame, chunk_str, current_x, current_y, current_size, is_bold, is_italic, is_strikethrough, false);
+                                        current_y += line_height;
+                                    }
+                                }
+                                continue;
+                            }
+                            
                             let test_line = if current_line.is_empty() {
                                 word.to_string()
                             } else {
@@ -322,6 +343,7 @@ impl MarkdownRenderer {
             self.text_color
         };
 
+        // Text is already wrapped at the parser level, just render it
         frame.fill_text(Text {
             content: text.to_string(),
             position: Point::new(x, y),
@@ -337,14 +359,15 @@ impl MarkdownRenderer {
         // Draw strikethrough line if needed
         if strikethrough {
             use iced::widget::canvas::{Path, Stroke};
-            let text_width = text.len() as f32 * size * 0.6;
+            let char_width = size * 0.6;
+            let text_width = text.len() as f32 * char_width;
             let line_y = y + size * 0.5;
-            let line = Path::line(
+            let strike_line = Path::line(
                 Point::new(x, line_y),
                 Point::new(x + text_width, line_y)
             );
             frame.stroke(
-                &line,
+                &strike_line,
                 Stroke::default()
                     .with_color(text_color)
                     .with_width(1.0)
