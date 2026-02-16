@@ -193,6 +193,8 @@ struct Cards {
     icon_settings: svg::Handle,
     icon_close: svg::Handle,
     icon_add: svg::Handle,
+    icon_duplicate: svg::Handle,
+    icon_delete: svg::Handle,
     window_size: iced::Size,
     last_tick: Instant,
 }
@@ -239,6 +241,8 @@ impl Cards {
             icon_settings: svg::Handle::from_path("src/icons/settings.svg"),
             icon_close: svg::Handle::from_path("src/icons/close.svg"),
             icon_add: svg::Handle::from_path("src/icons/add.svg"),
+            icon_duplicate: svg::Handle::from_path("src/icons/duplicate.svg"),
+            icon_delete: svg::Handle::from_path("src/icons/delete.svg"),
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
         };
@@ -1511,8 +1515,15 @@ impl Cards {
             });
 
         // Card management buttons - square (32×32)
+        let icon_color = self.theme.icon_color();
+
         let duplicate_btn = button(
-            container(text("⎘").size(16))
+            container(
+                svg(self.icon_duplicate.clone())
+                    .width(20)
+                    .height(20)
+                    .class(SvgStyle { color: icon_color })
+            )
             .width(32)
             .height(32)
             .align_x(Alignment::Center)
@@ -1522,7 +1533,12 @@ impl Cards {
         .on_press(Message::DuplicateCard(card_id));
 
         let delete_btn = button(
-            container(text("🗑").size(14))
+            container(
+                svg(self.icon_delete.clone())
+                    .width(20)
+                    .height(20)
+                    .class(SvgStyle { color: icon_color })
+            )
             .width(32)
             .height(32)
             .align_x(Alignment::Center)
