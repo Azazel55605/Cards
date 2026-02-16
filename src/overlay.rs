@@ -171,11 +171,11 @@ where
             }
         }
 
-        // For mouse events, only forward to overlay if cursor is within overlay bounds
+        // For mouse events, forward to overlay first, then to base if not captured
         if matches!(event, Event::Mouse(_)) {
             if let Some(cursor_position) = cursor.position() {
                 if overlay_layout.bounds().contains(cursor_position) {
-                    // Cursor is over overlay, let overlay handle it
+                    // Cursor is over overlay bounds, let overlay try to handle it
                     let overlay_status = self.overlay.as_widget_mut().on_event(
                         &mut tree.children[1],
                         event.clone(),
@@ -190,19 +190,20 @@ where
                     if overlay_status == iced::event::Status::Captured {
                         return overlay_status;
                     }
-                } else {
-                    // Cursor is NOT over overlay, send directly to base (canvas)
-                    return self.base.as_widget_mut().on_event(
-                        &mut tree.children[0],
-                        event,
-                        base_layout,
-                        cursor,
-                        renderer,
-                        clipboard,
-                        shell,
-                        viewport,
-                    );
+                    // If overlay ignored it, fall through to send to base
                 }
+                // Cursor is NOT over overlay bounds OR overlay ignored the event
+                // Send to base (canvas) to handle
+                return self.base.as_widget_mut().on_event(
+                    &mut tree.children[0],
+                    event,
+                    base_layout,
+                    cursor,
+                    renderer,
+                    clipboard,
+                    shell,
+                    viewport,
+                );
             }
         }
 

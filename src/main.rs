@@ -363,13 +363,13 @@ impl Cards {
                         }
                     }
                     DotGridMessage::CardLeftClickBar(card_id, _pos) => {
-                        // Start dragging - don't move the card yet
+                        // Start dragging - keep card selected but stop editing
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             card.is_dragging = true;
                             card.is_editing = false; // Stop editing when dragging
                         }
                         self.editing_card_id = None;
-                        self.selected_card_id = None;
+                        // Keep selected_card_id so toolbar stays visible during drag
                         self.dot_grid.clear_cards_cache();
                     }
                     DotGridMessage::CardLeftClickBody(card_id) => {
@@ -460,6 +460,8 @@ impl Cards {
                             // Snap to grid
                             card.target_position = Card::snap_to_grid(card.current_position, dot_spacing);
                         }
+                        // Clear selection after drag completes
+                        self.selected_card_id = None;
                         self.dot_grid.clear_cards_cache();
                     }
                 }
@@ -955,8 +957,8 @@ impl Cards {
         if let Some(card_id) = self.selected_card_id {
             if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
                 // Position toolbar above the card, centered
-                // Toolbar width is 340.0, so offset by half to center it
-                let toolbar_x = card.current_position.x + self.canvas_offset.x + (card.width / 2.0) - 170.0;
+                // Toolbar width is 360.0, so offset by half to center it
+                let toolbar_x = card.current_position.x + self.canvas_offset.x + (card.width / 2.0) - 250.0;
                 let toolbar_y = card.current_position.y + self.canvas_offset.y - 70.0;
                 let toolbar_pos = Point::new(toolbar_x, toolbar_y);
 
@@ -968,7 +970,7 @@ impl Cards {
                     self.theme.button_border(),
                     self.theme.sidebar_shadow(),
                 )
-                .width(340.0)
+                .width(500.0)
                 .into();
 
                 view = Overlay::new(view, toolbar, Color::TRANSPARENT).into();
@@ -1410,7 +1412,7 @@ impl Cards {
             shadow_color: Color::TRANSPARENT,
         };
 
-        // Markdown formatting buttons
+        // Markdown formatting buttons - all square (32×32)
         let bold_btn = button(
             container(
                 text("B").size(14).font(iced::Font {
@@ -1419,7 +1421,7 @@ impl Cards {
                 })
             )
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
@@ -1434,7 +1436,7 @@ impl Cards {
                 })
             )
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
@@ -1444,7 +1446,7 @@ impl Cards {
         let strike_btn = button(
             container(text("S̶").size(14))
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
@@ -1454,7 +1456,7 @@ impl Cards {
         let code_btn = button(
             container(text("<>").size(12))
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
@@ -1464,7 +1466,7 @@ impl Cards {
         let code_block_btn = button(
             container(text("{ }").size(12))
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
@@ -1477,7 +1479,7 @@ impl Cards {
                 ..Default::default()
             }))
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
@@ -1487,18 +1489,18 @@ impl Cards {
         let bullet_btn = button(
             container(text("•").size(16))
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
         .class(btn_style.clone())
         .on_press(Message::FormatBullet);
 
-        // Separator
+        // Vertical separator
         let separator_color = self.theme.separator_color();
-        let separator = container(Space::with_width(1))
+        let separator = container(Space::new(Length::Fixed(1.0), Length::Fixed(32.0)))
             .width(1)
-            .height(24)
+            .height(32)
             .style(move |_theme: &IcedTheme| {
                 container::Style {
                     background: Some(iced::Background::Color(separator_color)),
@@ -1508,11 +1510,11 @@ impl Cards {
                 }
             });
 
-        // Card management buttons
+        // Card management buttons - square (32×32)
         let duplicate_btn = button(
             container(text("⎘").size(16))
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
@@ -1522,7 +1524,7 @@ impl Cards {
         let delete_btn = button(
             container(text("🗑").size(14))
             .width(32)
-            .height(28)
+            .height(32)
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
         )
