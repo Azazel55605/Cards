@@ -53,20 +53,20 @@ pub enum CardIcon {
 }
 
 impl CardIcon {
-    pub fn svg_path(&self) -> &'static str {
+    pub fn svg_data(&self) -> &'static [u8] {
         match self {
-            CardIcon::Default => "src/icons/default.svg",
-            CardIcon::Star => "src/icons/star.svg",
-            CardIcon::Heart => "src/icons/heart.svg",
-            CardIcon::Circle => "src/icons/circle.svg",
-            CardIcon::Square => "src/icons/square.svg",
-            CardIcon::Triangle => "src/icons/triangle.svg",
-            CardIcon::Check => "src/icons/check.svg",
-            CardIcon::Cross => "src/icons/cross.svg",
-            CardIcon::Question => "src/icons/question.svg",
-            CardIcon::Exclamation => "src/icons/exclamation.svg",
-            CardIcon::Plus => "src/icons/plus.svg",
-            CardIcon::Minus => "src/icons/minus.svg",
+            CardIcon::Default => include_bytes!("icons/default.svg"),
+            CardIcon::Star => include_bytes!("icons/star.svg"),
+            CardIcon::Heart => include_bytes!("icons/heart.svg"),
+            CardIcon::Circle => include_bytes!("icons/circle.svg"),
+            CardIcon::Square => include_bytes!("icons/square.svg"),
+            CardIcon::Triangle => include_bytes!("icons/triangle.svg"),
+            CardIcon::Check => include_bytes!("icons/check.svg"),
+            CardIcon::Cross => include_bytes!("icons/cross.svg"),
+            CardIcon::Question => include_bytes!("icons/question.svg"),
+            CardIcon::Exclamation => include_bytes!("icons/exclamation.svg"),
+            CardIcon::Plus => include_bytes!("icons/plus.svg"),
+            CardIcon::Minus => include_bytes!("icons/minus.svg"),
         }
     }
 

@@ -236,15 +236,15 @@ impl Cards {
             selected_card_id: None,
             clipboard_text: String::new(),
             config,
-            icon_menu_left: svg::Handle::from_path("src/icons/menu-left.svg"),
-            icon_menu_right: svg::Handle::from_path("src/icons/menu-right.svg"),
-            icon_moon: svg::Handle::from_path("src/icons/moon.svg"),
-            icon_sun: svg::Handle::from_path("src/icons/sun.svg"),
-            icon_settings: svg::Handle::from_path("src/icons/settings.svg"),
-            icon_close: svg::Handle::from_path("src/icons/close.svg"),
-            icon_add: svg::Handle::from_path("src/icons/add.svg"),
-            icon_duplicate: svg::Handle::from_path("src/icons/duplicate.svg"),
-            icon_delete: svg::Handle::from_path("src/icons/delete.svg"),
+            icon_menu_left: svg::Handle::from_memory(include_bytes!("icons/menu-left.svg")),
+            icon_menu_right: svg::Handle::from_memory(include_bytes!("icons/menu-right.svg")),
+            icon_moon: svg::Handle::from_memory(include_bytes!("icons/moon.svg")),
+            icon_sun: svg::Handle::from_memory(include_bytes!("icons/sun.svg")),
+            icon_settings: svg::Handle::from_memory(include_bytes!("icons/settings.svg")),
+            icon_close: svg::Handle::from_memory(include_bytes!("icons/close.svg")),
+            icon_add: svg::Handle::from_memory(include_bytes!("icons/add.svg")),
+            icon_duplicate: svg::Handle::from_memory(include_bytes!("icons/duplicate.svg")),
+            icon_delete: svg::Handle::from_memory(include_bytes!("icons/delete.svg")),
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
         };
@@ -1274,7 +1274,7 @@ impl Cards {
 
             let icon_btn = button(
                 row![
-                    svg(svg::Handle::from_path(icon.svg_path()))
+                    svg(svg::Handle::from_memory(icon.svg_data()))
                         .width(16)
                         .height(16)
                         .class(SvgStyle { color: icon_color }),
