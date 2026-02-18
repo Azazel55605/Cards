@@ -429,8 +429,8 @@ impl Cards {
                             self.selected_card_id = Some(card_id);
                             if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                                 card.is_editing = true;
-                                // Select all text when starting to edit
-                                card.content.select_all();
+                                // Move cursor to end of text
+                                card.content.move_cursor_to_end();
                             }
                             // Close any open menus
                             self.context_menu_position = None;
