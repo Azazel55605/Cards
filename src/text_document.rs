@@ -1,0 +1,176 @@
+use iced::{Color, Point};
+
+/// Represents a styled text segment
+#[derive(Debug, Clone)]
+pub struct TextSegment {
+    pub text: String,
+    pub style: TextStyle,
+}
+
+/// Text styling options
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextStyle {
+    pub size: f32,
+    pub bold: bool,
+    pub italic: bool,
+    pub strikethrough: bool,
+    pub underline: bool,
+    pub is_code: bool,
+    pub color: Option<Color>, // None means use default
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            size: 12.0,
+            bold: false,
+            italic: false,
+            strikethrough: false,
+            underline: false,
+            is_code: false,
+            color: None,
+        }
+    }
+}
+
+impl TextStyle {
+    pub fn heading(level: u32) -> Self {
+        let size = match level {
+            1 => 20.0,
+            2 => 18.0,
+            3 => 16.0,
+            4 => 14.0,
+            5 => 13.0,
+            _ => 12.0,
+        };
+        Self {
+            size,
+            bold: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn bold() -> Self {
+        Self {
+            bold: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn italic() -> Self {
+        Self {
+            italic: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn code() -> Self {
+        Self {
+            is_code: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn strikethrough() -> Self {
+        Self {
+            strikethrough: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn with_bold(mut self, bold: bool) -> Self {
+        self.bold = bold;
+        self
+    }
+
+    pub fn with_italic(mut self, italic: bool) -> Self {
+        self.italic = italic;
+        self
+    }
+
+    pub fn with_strikethrough(mut self, strikethrough: bool) -> Self {
+        self.strikethrough = strikethrough;
+        self
+    }
+
+    pub fn with_underline(mut self, underline: bool) -> Self {
+        self.underline = underline;
+        self
+    }
+}
+
+/// Represents a line of text segments
+#[derive(Debug, Clone)]
+pub struct TextLine {
+    pub segments: Vec<TextSegment>,
+    pub indent: f32,
+    pub spacing_before: f32,
+    pub spacing_after: f32,
+}
+
+impl Default for TextLine {
+    fn default() -> Self {
+        Self {
+            segments: Vec::new(),
+            indent: 0.0,
+            spacing_before: 0.0,
+            spacing_after: 0.0,
+        }
+    }
+}
+
+impl TextLine {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_indent(mut self, indent: f32) -> Self {
+        self.indent = indent;
+        self
+    }
+
+    pub fn with_spacing_before(mut self, spacing: f32) -> Self {
+        self.spacing_before = spacing;
+        self
+    }
+
+    pub fn with_spacing_after(mut self, spacing: f32) -> Self {
+        self.spacing_after = spacing;
+        self
+    }
+
+    pub fn add_segment(&mut self, text: String, style: TextStyle) {
+        self.segments.push(TextSegment { text, style });
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty() || self.segments.iter().all(|s| s.text.trim().is_empty())
+    }
+}
+
+/// Document structure - collection of text lines
+#[derive(Debug, Clone)]
+pub struct TextDocument {
+    pub lines: Vec<TextLine>,
+}
+
+impl Default for TextDocument {
+    fn default() -> Self {
+        Self { lines: Vec::new() }
+    }
+}
+
+impl TextDocument {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_line(&mut self, line: TextLine) {
+        self.lines.push(line);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+}
+

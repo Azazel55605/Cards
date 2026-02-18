@@ -12,6 +12,10 @@ mod markdown;
 mod custom_text_editor;
 mod icon_util;
 mod positioned;
+mod text_document;
+mod text_renderer;
+mod markdown_parser;
+mod text_processor;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
