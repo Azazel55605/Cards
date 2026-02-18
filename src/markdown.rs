@@ -1,6 +1,6 @@
 use iced::widget::canvas::{Frame, Text};
 use iced::{Color, Point, alignment};
-use pulldown_cmark::{Parser, Event, Tag, HeadingLevel, CodeBlockKind, Options};
+use pulldown_cmark::{Parser, Event, Tag, HeadingLevel, Options};
 
 pub struct MarkdownRenderer {
     pub text_color: Color,
@@ -37,7 +37,6 @@ impl MarkdownRenderer {
         let mut is_italic = false;
         let mut is_strikethrough = false;
         let mut in_code_block = false;
-        let mut code_block_lang: Option<String> = None;
 
         for event in parser {
             match event {
@@ -83,10 +82,6 @@ impl MarkdownRenderer {
                         }
                         Tag::CodeBlock(kind) => {
                             in_code_block = true;
-                            code_block_lang = match kind {
-                                CodeBlockKind::Fenced(lang) => Some(lang.to_string()),
-                                _ => None,
-                            };
                             current_size = 11.0;
                             line_height = 14.0;
                             if current_y > position.y {
@@ -148,7 +143,6 @@ impl MarkdownRenderer {
                                 current_line.clear();
                             }
                             in_code_block = false;
-                            code_block_lang = None;
                             current_size = 12.0;
                             line_height = 14.0;
                             current_y += line_height * 0.3;

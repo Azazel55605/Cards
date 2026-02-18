@@ -1,17 +1,16 @@
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
-use iced::advanced::widget::{self, Widget, Tree};
+use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
-use iced::{Border, Color, Element, Event, Length, Rectangle, Shadow, Size};
+use iced::{Element, Event, Length, Rectangle, Size};
 
 pub struct Overlay<'a, Message, Renderer = iced::Renderer>
 where
     Renderer: iced::advanced::Renderer,
 {
     base: Element<'a, Message, iced::Theme, Renderer>,
-    overlay: Element<'a, Message, iced::Theme, Renderer>,
-    background: Color,
+    overlay: Element<'a, Message, iced::Theme, Renderer>
 }
 
 impl<'a, Message, Renderer> Overlay<'a, Message, Renderer>
@@ -21,12 +20,10 @@ where
     pub fn new(
         base: impl Into<Element<'a, Message, iced::Theme, Renderer>>,
         overlay: impl Into<Element<'a, Message, iced::Theme, Renderer>>,
-        background: Color,
     ) -> Self {
         Self {
             base: base.into(),
-            overlay: overlay.into(),
-            background,
+            overlay: overlay.into()
         }
     }
 }

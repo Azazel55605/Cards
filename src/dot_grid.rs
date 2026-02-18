@@ -513,7 +513,7 @@ impl Program<DotGridMessage> for &DotGrid {
                     mouse::Event::ButtonPressed(mouse::Button::Left) => {
                         if let Some(pos) = current_pos {
                             // First check if we're clicking outside all cards while editing
-                            let mut clicked_on_card = false;
+                            let clicked_on_card = false;
                             let mut is_editing_any = false;
 
                             for card in &self.cards {
@@ -529,8 +529,6 @@ impl Program<DotGridMessage> for &DotGrid {
                                 };
 
                                 if screen_bounds.contains(pos) {
-                                    clicked_on_card = true;
-
                                     let top_bar_bounds = Rectangle {
                                         x: screen_bounds.x,
                                         y: screen_bounds.y,
@@ -987,15 +985,3 @@ impl Program<DotGridMessage> for &DotGrid {
         mouse::Interaction::default()
     }
 }
-
-fn rects_intersect(a: Rectangle, b: Rectangle) -> bool {
-    let ax2 = a.x + a.width;
-    let ay2 = a.y + a.height;
-    let bx2 = b.x + b.width;
-    let by2 = b.y + b.height;
-
-    !(ax2 <= b.x || bx2 <= a.x || ay2 <= b.y || by2 <= a.y)
-}
-
-// Icon rendering is now handled by SVG widget overlays in main.rs
-// This provides full Bootstrap Icons support without canvas limitations

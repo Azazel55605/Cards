@@ -13,15 +13,13 @@ mod custom_text_editor;
 mod icon_util;
 mod positioned;
 
-use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, text_input};
+use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
 use iced::{Border, Color, Shadow};
 use iced::time;
 use iced::event::{self, Event};
 use iced::mouse;
-use iced::keyboard;
 use iced::{Padding, Alignment};
-use iced::widget;
 use std::time::{Duration, Instant};
 use theme::Theme;
 use button_style::CardButtonStyle;
@@ -253,10 +251,6 @@ impl Cards {
         };
         cards.update_exclude_region();
         (cards, Task::none())
-    }
-
-    fn title(&self) -> String {
-        String::from("Cards App")
     }
 
     // Helper function to convert icondata to complete SVG
@@ -901,7 +895,6 @@ impl Cards {
 
         let sidebar_bg = self.theme.sidebar_background();
         let sidebar_shadow = self.theme.sidebar_shadow();
-        let bg_color = self.theme.background();
         let separator_color = self.theme.separator_color();
         let icon_color = self.theme.icon_color();
 
@@ -926,7 +919,7 @@ impl Cards {
             .on_close(Message::HideContextMenu)
             .into();
 
-            view = Overlay::new(view, context_menu, Color::TRANSPARENT).into();
+            view = Overlay::new(view, context_menu).into();
         }
 
         // Add card icon menu (before sidebar)
@@ -943,7 +936,7 @@ impl Cards {
             .on_close(Message::HideCardIconMenu)
             .into();
 
-            view = Overlay::new(view, card_menu, Color::TRANSPARENT).into();
+            view = Overlay::new(view, card_menu).into();
         }
 
         // Add icon overlays for all cards - renders Bootstrap Icons properly
@@ -963,7 +956,7 @@ impl Cards {
                 Point::new(icon_x, icon_y)
             ).into();
 
-            view = Overlay::new(view, positioned_icon, Color::TRANSPARENT).into();
+            view = Overlay::new(view, positioned_icon).into();
         }
 
         // Add card toolbar (before sidebar) - shown when a card is selected
@@ -986,7 +979,7 @@ impl Cards {
                 .width(500.0)
                 .into();
 
-                view = Overlay::new(view, toolbar, Color::TRANSPARENT).into();
+                view = Overlay::new(view, toolbar).into();
             }
         }
 
@@ -1162,7 +1155,7 @@ impl Cards {
 
         // IMPORTANT: Add sidebar overlay LAST (except settings) to ensure it renders on top of all card elements
         // The order is: base canvas -> context menu -> card menu -> toolbar -> SIDEBAR -> settings
-        view = Overlay::new(view, sidebar, Color::TRANSPARENT).into();
+        view = Overlay::new(view, sidebar).into();
 
         // Add settings modal LAST (on top of everything)
         if self.settings_open {
@@ -1176,7 +1169,7 @@ impl Cards {
             .height(500.0)
             .into();
 
-            view = Overlay::new(view, settings_modal, Color::TRANSPARENT).into();
+            view = Overlay::new(view, settings_modal).into();
         }
 
         view

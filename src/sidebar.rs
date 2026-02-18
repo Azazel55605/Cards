@@ -1,6 +1,6 @@
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
-use iced::advanced::widget::{self, Widget, Tree};
+use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
 use iced::{Border, Color, Element, Event, Length, Point, Rectangle, Shadow, Size, Vector};

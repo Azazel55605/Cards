@@ -275,7 +275,6 @@ pub enum ConfigError {
     NoConfigDir,
     IoError(String),
     SerializeError(String),
-    ParseError(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -283,8 +282,7 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::NoConfigDir => write!(f, "Could not determine config directory"),
             ConfigError::IoError(e) => write!(f, "IO error: {}", e),
-            ConfigError::SerializeError(e) => write!(f, "Serialization error: {}", e),
-            ConfigError::ParseError(e) => write!(f, "Parse error: {}", e),
+            ConfigError::SerializeError(e) => write!(f, "Serialization error: {}", e)
         }
     }
 }
