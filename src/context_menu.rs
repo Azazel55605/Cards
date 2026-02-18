@@ -309,6 +309,29 @@ where
                     }
                 }
             }
+
+            // Handle scroll wheel events - forward to content if cursor is over menu
+            if let Event::Mouse(mouse::Event::WheelScrolled { .. }) = &event {
+                if let Some(pos) = cursor.position() {
+                    if menu_bounds.contains(pos) {
+                        let translated_cursor = mouse::Cursor::Available(Point::new(
+                            pos.x - menu_bounds.x,
+                            pos.y - menu_bounds.y,
+                        ));
+
+                        return self.content.as_widget_mut().on_event(
+                            &mut tree.children[0],
+                            event,
+                            content_layout,
+                            translated_cursor,
+                            renderer,
+                            clipboard,
+                            shell,
+                            viewport,
+                        );
+                    }
+                }
+            }
         }
 
         iced::event::Status::Ignored

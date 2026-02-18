@@ -9,6 +9,9 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 dirs = "5.0"
 pulldown-cmark = "0.9"
+icondata = "0.1"
+icondata_core = "0.1"
+icondata_bs = "0.1.0"
 
 [profile.dev]
 opt-level = 2

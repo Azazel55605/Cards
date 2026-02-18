@@ -10,6 +10,8 @@ mod card;
 mod context_menu;
 mod markdown;
 mod custom_text_editor;
+mod icon_util;
+mod positioned;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -31,6 +33,7 @@ use svg_style::SvgStyle;
 use config::Config;
 use context_menu::ContextMenu;
 use card::{Card, CardIcon};
+use positioned::Positioned;
 
 // Custom text editor style with visible cursor
 struct TransparentTextEditorStyle {
@@ -255,6 +258,8 @@ impl Cards {
     fn title(&self) -> String {
         String::from("Cards App")
     }
+
+    // Helper function to convert icondata to complete SVG
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
@@ -553,6 +558,39 @@ impl Cards {
                 // Old text_editor action - no longer used with custom editor
             }
             Message::KeyboardInput(keyboard_event) => {
+                // Check for global Escape key first
+                if let iced::keyboard::Event::KeyPressed { key, .. } = &keyboard_event {
+                    if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
+                        // Close menus/settings/editing - but never quit the app
+                        if self.card_icon_menu_position.is_some() {
+                            self.card_icon_menu_position = None;
+                            self.card_icon_menu_card_id = None;
+                            return Task::none();
+                        } else if self.context_menu_position.is_some() {
+                            self.context_menu_position = None;
+                            self.pending_card_position = None;
+                            return Task::none();
+                        } else if self.settings_open {
+                            self.settings_open = false;
+                            self.update_exclude_region();
+                            return Task::none();
+                        } else if self.editing_card_id.is_some() {
+                            // Stop editing
+                            if let Some(card_id) = self.editing_card_id {
+                                if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                    card.is_editing = false;
+                                }
+                            }
+                            self.editing_card_id = None;
+                            self.selected_card_id = None;
+                            self.dot_grid.clear_cards_cache();
+                            return Task::none();
+                        }
+                        // If nothing to close, just ignore Escape
+                        return Task::none();
+                    }
+                }
+                
                 // Handle keyboard input for editing card
                 if let Some(card_id) = self.editing_card_id {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
@@ -841,6 +879,9 @@ impl Cards {
             match event {
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
+                Event::Window(iced::window::Event::CloseRequested) => {
+                    std::process::exit(0);
+                }
                 Event::Keyboard(keyboard_event) => Some(Message::KeyboardInput(keyboard_event)),
                 _ => None,
             }
@@ -903,6 +944,26 @@ impl Cards {
             .into();
 
             view = Overlay::new(view, card_menu, Color::TRANSPARENT).into();
+        }
+
+        // Add icon overlays for all cards - renders Bootstrap Icons properly
+        for card in self.dot_grid.cards().iter() {
+            let icon_size = 20.0;
+            let icon_x = card.current_position.x + self.canvas_offset.x + 5.0;
+            let icon_y = card.current_position.y + self.canvas_offset.y + 5.0;
+
+            let svg_data = icon_util::icon_to_svg(card.icon.get_icondata());
+            let icon_widget = svg(svg::Handle::from_memory(svg_data))
+                .width(icon_size)
+                .height(icon_size)
+                .class(SvgStyle { color: card.color });
+
+            let positioned_icon: Element<Message> = Positioned::new(
+                icon_widget,
+                Point::new(icon_x, icon_y)
+            ).into();
+
+            view = Overlay::new(view, positioned_icon, Color::TRANSPARENT).into();
         }
 
         // Add card toolbar (before sidebar) - shown when a card is selected
@@ -1255,95 +1316,189 @@ impl Cards {
     }
 
     fn build_card_icon_menu(&self) -> Element<Message> {
-        let icon_color = self.theme.icon_color();
         let bg_color = self.theme.sidebar_background();
+        let separator_color = self.theme.icon_color().scale_alpha(0.2);
+        let scrollbar_color = self.theme.icon_color().scale_alpha(0.3);
 
-        let mut items = column![].spacing(5).padding(5.0);
+        // Get the current card's color
+        let card_color = if let Some(card_id) = self.card_icon_menu_card_id {
+            self.dot_grid.cards().get(card_id).map(|c| c.color).unwrap_or(Color::from_rgb8(100, 150, 255))
+        } else {
+            Color::from_rgb8(100, 150, 255)
+        };
 
-        // Icon selection
-        items = items.push(text("Change Icon").size(12).color(self.theme.button_text()));
+        let icon_btn_style = CardButtonStyle {
+            background: Color::TRANSPARENT,
+            background_hovered: self.theme.button_background_hovered(),
+            text_color: self.theme.button_text(),
+            border_color: Color::TRANSPARENT,
+            shadow_color: Color::TRANSPARENT,
+        };
 
-        for icon in CardIcon::all() {
-            let icon_btn_style = CardButtonStyle {
-                background: Color::TRANSPARENT,
-                background_hovered: self.theme.button_background_hovered(),
-                text_color: self.theme.button_text(),
-                border_color: Color::TRANSPARENT,
-                shadow_color: Color::TRANSPARENT,
-            };
+        // Build icon grid (6 icons per row)
+        let mut icon_rows = column![].spacing(0);
+        let icons = CardIcon::all();
+        let icons_per_row = 6;
 
-            let icon_btn = button(
-                row![
-                    svg(svg::Handle::from_memory(icon.svg_data()))
-                        .width(16)
-                        .height(16)
-                        .class(SvgStyle { color: icon_color }),
-                    text(format!("{:?}", icon)).size(12),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .padding(Padding {
-                    top: 4.0,
-                    right: 8.0,
-                    bottom: 4.0,
-                    left: 8.0,
-                })
-            )
-            .width(Length::Fill)
-            .class(icon_btn_style)
-            .on_press(Message::ChangeCardIcon(self.card_icon_menu_card_id.unwrap(), *icon));
+        for chunk in icons.chunks(icons_per_row) {
+            let mut icon_row = row![].spacing(0);
 
-            items = items.push(icon_btn);
+            for icon in chunk {
+                let svg_data = icon_util::icon_to_svg(icon.get_icondata());
+                let icon_btn = button(
+                    container(
+                        svg(svg::Handle::from_memory(svg_data))
+                            .width(16)
+                            .height(16)
+                            .class(SvgStyle { color: card_color })
+                    )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+                )
+                .width(32)
+                .height(32)
+                .class(icon_btn_style.clone())
+                .on_press(Message::ChangeCardIcon(self.card_icon_menu_card_id.unwrap(), *icon));
+
+                icon_row = icon_row.push(icon_btn);
+            }
+
+            icon_rows = icon_rows.push(icon_row);
         }
 
-        // Color selection
-        items = items.push(Space::with_height(10));
-        items = items.push(text("Change Color").size(12).color(self.theme.button_text()));
+        // Custom scrollbar style
+        let scrollable_style = move |_theme: &IcedTheme, status: iced::widget::scrollable::Status| {
+            use iced::widget::scrollable::{Rail, Scroller};
+            iced::widget::scrollable::Style {
+                container: iced::widget::container::Style::default(),
+                vertical_rail: Rail {
+                    background: None,
+                    border: Border::default(),
+                    scroller: Scroller {
+                        color: scrollbar_color,
+                        border: Border {
+                            radius: 2.0.into(),
+                            ..Default::default()
+                        },
+                    },
+                },
+                horizontal_rail: Rail {
+                    background: None,
+                    border: Border::default(),
+                    scroller: Scroller {
+                        color: scrollbar_color,
+                        border: Border {
+                            radius: 2.0.into(),
+                            ..Default::default()
+                        },
+                    },
+                },
+                gap: None,
+            }
+        };
 
+        // Scrollable icon area
+        let scrollable_icons = scrollable(
+            container(icon_rows)
+                .padding(Padding::new(5.0))
+                .width(Length::Fill)
+        )
+        .height(Length::Fixed(300.0))
+        .width(Length::Fill)
+        .direction(iced::widget::scrollable::Direction::Vertical(
+            iced::widget::scrollable::Scrollbar::new()
+                .width(4)
+                .scroller_width(4)
+        ))
+        .style(scrollable_style);
+
+        // Separator
+        let separator = container(Space::with_height(1))
+            .width(Length::Fill)
+            .height(1)
+            .style(move |_theme: &IcedTheme| {
+                iced::widget::container::Style {
+                    background: Some(iced::Background::Color(separator_color)),
+                    border: Border::default(),
+                    shadow: Shadow::default(),
+                    text_color: None,
+                }
+            });
+
+        // Color selection grid (fixed at bottom)
         let colors = [
-            Color::from_rgb8(100, 150, 255),
-            Color::from_rgb8(255, 100, 100),
-            Color::from_rgb8(100, 255, 100),
-            Color::from_rgb8(255, 200, 100),
-            Color::from_rgb8(200, 100, 255),
+            Color::from_rgb8(100, 150, 255), // Blue
+            Color::from_rgb8(255, 100, 100), // Red
+            Color::from_rgb8(100, 255, 100), // Green
+            Color::from_rgb8(255, 200, 100), // Orange
+            Color::from_rgb8(200, 100, 255), // Purple
+            Color::from_rgb8(255, 150, 200), // Pink
+            Color::from_rgb8(100, 255, 255), // Cyan
+            Color::from_rgb8(255, 255, 100), // Yellow
+            Color::from_rgb8(150, 150, 150), // Gray
+            Color::from_rgb8(255, 150, 100), // Coral
         ];
 
-        for &color in &colors {
-            let color_btn_style = CardButtonStyle {
-                background: Color::TRANSPARENT,
-                background_hovered: self.theme.button_background_hovered(),
-                text_color: self.theme.button_text(),
-                border_color: Color::TRANSPARENT,
-                shadow_color: Color::TRANSPARENT,
-            };
+        let border_color = self.theme.button_text();
+        let mut color_rows = column![].spacing(8);
+        let colors_per_row = 5;
 
-            let color_btn = button(
-                container(
-                    column![
-                        Space::with_width(20),
-                        Space::with_height(20)
-                    ]
+        for chunk in colors.chunks(colors_per_row) {
+            let mut color_row = row![].spacing(8).align_y(Alignment::Center);
+
+            for &color in chunk {
+                let color_btn = button(
+                    container(Space::with_height(0))
+                        .width(30)
+                        .height(30)
+                        .style(move |_theme: &IcedTheme| {
+                            container::Style {
+                                background: Some(iced::Background::Color(color)),
+                                border: Border {
+                                    radius: 15.0.into(), // Make it circular
+                                    width: 2.0,
+                                    color: if color == card_color {
+                                        border_color
+                                    } else {
+                                        Color::TRANSPARENT
+                                    },
+                                },
+                                shadow: Shadow::default(),
+                                text_color: None,
+                            }
+                        })
                 )
-                    .style(move |_theme: &IcedTheme| {
-                        container::Style {
-                            background: Some(iced::Background::Color(color)),
-                            border: Border {
-                                radius: 4.0.into(),
-                                ..Default::default()
-                            },
-                            shadow: Shadow::default(),
-                            text_color: None,
-                        }
-                    })
-            )
-            .width(Length::Fill)
-            .class(color_btn_style)
-            .on_press(Message::ChangeCardColor(self.card_icon_menu_card_id.unwrap(), color));
+                .padding(0)
+                .class(icon_btn_style.clone())
+                .on_press(Message::ChangeCardColor(self.card_icon_menu_card_id.unwrap(), color));
 
-            items = items.push(color_btn);
+                color_row = color_row.push(color_btn);
+            }
+
+            color_rows = color_rows.push(color_row);
         }
 
-        container(items)
+        // Main layout: scrollable icons on top, fixed separator and colors at bottom
+        let content = column![
+            scrollable_icons,
+            container(separator)
+                .width(Length::Fill)
+                .padding(Padding {
+                    top: 8.0,
+                    right: 10.0,
+                    bottom: 8.0,
+                    left: 10.0,
+                }),
+            container(color_rows)
+                .padding(Padding::new(10.0))
+                .width(Length::Fill),
+        ]
+        .spacing(0)
+        .width(Length::Fill);
+
+        container(content)
             .style(move |_theme: &IcedTheme| {
                 container::Style {
                     background: Some(iced::Background::Color(bg_color)),
