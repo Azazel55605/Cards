@@ -141,7 +141,6 @@ pub enum Message {
     Tick(Instant),
     DotGridMessage(DotGridMessage),
     EventOccurred(Event),
-    RecenterCanvas,
     // Context menu messages
     ShowContextMenu(Point),
     HideContextMenu,
@@ -177,6 +176,10 @@ struct Cards {
     animation_progress: f32,
     dot_grid: DotGrid,
     canvas_offset: Vector,
+    // Canvas recentering animation
+    canvas_animating: bool,
+    canvas_animation_start: Vector,
+    canvas_animation_progress: f32,
     // Settings state
     settings_open: bool,
     settings_category: SettingsCategory,
@@ -232,6 +235,9 @@ impl Cards {
             animation_progress: 0.0,
             dot_grid,
             canvas_offset: Vector::new(0.0, 0.0),
+            canvas_animating: false,
+            canvas_animation_start: Vector::new(0.0, 0.0),
+            canvas_animation_progress: 0.0,
             settings_open: false,
             settings_category: SettingsCategory::default(),
             context_menu_position: None,
@@ -324,6 +330,8 @@ impl Cards {
                 }
 
                 let animation_duration = self.config.general.animation_duration_ms as f32;
+
+                // Animate sidebar
                 self.animation_progress += 16.0 / animation_duration;
 
                 if self.animation_progress >= 1.0 {
@@ -336,6 +344,27 @@ impl Cards {
 
                     let target = if self.sidebar_open { 0.0 } else { SIDEBAR_HIDDEN_OFFSET };
                     self.sidebar_offset = self.animation_start_offset + (target - self.animation_start_offset) * eased;
+                }
+
+                // Animate canvas recentering
+                if self.canvas_animating {
+                    self.canvas_animation_progress += 16.0 / animation_duration;
+
+                    if self.canvas_animation_progress >= 1.0 {
+                        self.canvas_animation_progress = 1.0;
+                        self.canvas_animating = false;
+                        self.canvas_offset = Vector::new(0.0, 0.0);
+                    } else {
+                        let t = self.canvas_animation_progress;
+                        // Use ease-out cubic for smooth deceleration
+                        let eased = 1.0 - (1.0 - t).powi(3);
+
+                        let target = Vector::new(0.0, 0.0);
+                        self.canvas_offset.x = self.canvas_animation_start.x + (target.x - self.canvas_animation_start.x) * eased;
+                        self.canvas_offset.y = self.canvas_animation_start.y + (target.y - self.canvas_animation_start.y) * eased;
+                    }
+
+                    self.dot_grid.set_offset(self.canvas_offset);
                 }
 
                 self.update_exclude_region();
@@ -476,11 +505,6 @@ impl Cards {
                     }
                 }
             }
-            Message::RecenterCanvas => {
-                // Reset canvas offset to center (0, 0)
-                self.canvas_offset = Vector::new(0.0, 0.0);
-                self.dot_grid.set_offset(self.canvas_offset);
-            }
             Message::EventOccurred(event) => {
                 match event {
                     Event::Window(iced::window::Event::Resized(size)) => {
@@ -566,8 +590,16 @@ impl Cards {
                 if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = &keyboard_event {
                     // Ctrl+0 to recenter canvas (global, works even when not editing)
                     if modifiers.control() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "0") {
-                        self.canvas_offset = Vector::new(0.0, 0.0);
-                        self.dot_grid.set_offset(self.canvas_offset);
+                        if self.config.general.enable_animations {
+                            // Start animation
+                            self.canvas_animating = true;
+                            self.canvas_animation_start = self.canvas_offset;
+                            self.canvas_animation_progress = 0.0;
+                        } else {
+                            // Instant recenter
+                            self.canvas_offset = Vector::new(0.0, 0.0);
+                            self.dot_grid.set_offset(self.canvas_offset);
+                        }
                         return Task::none();
                     }
 
@@ -913,9 +945,6 @@ impl Cards {
 
             match event {
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) => {
-                    Some(Message::RecenterCanvas)
-                }
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::CloseRequested) => {
                     std::process::exit(0);

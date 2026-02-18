@@ -63,7 +63,6 @@ cargo run --release
 | `Ctrl + V` | Paste text |
 | `Ctrl + 0` | Recenter canvas to origin |
 | `Esc` | Exit editing mode / Close menus |
-| `Middle Mouse Button` | Recenter canvas to origin |
 
 ### Text Editing
 
@@ -176,10 +175,9 @@ When a card is selected, a toolbar appears above it with formatting options:
 ### Canvas Navigation
 
 - **Click and drag** on empty space to pan the canvas
+- **Middle-mouse drag** for quick panning
 - **Scroll** to navigate vertically
-- **Recenter the view**: Use `Ctrl+0` or middle-click to instantly return to origin (0, 0)
-  - `Ctrl+0` works everywhere (great for laptops without middle-mouse)
-  - Middle-mouse button or three-finger tap (if your touchpad supports it)
+- **Recenter the view**: Press `Ctrl+0` to instantly return to origin (0, 0)
 - Use the **sidebar** to toggle settings and themes
 
 ### Theme & Settings
