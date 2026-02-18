@@ -158,6 +158,35 @@ impl DotGrid {
         id
     }
 
+    pub fn add_card_with_size(
+        &mut self,
+        screen_position: Point,
+        content: &str,
+        icon: crate::card::CardIcon,
+        color: Color,
+        width: f32,
+        height: f32,
+    ) -> usize {
+        let id = self.cards.len();
+        let world_position = Point::new(
+            screen_position.x - self.offset.x,
+            screen_position.y - self.offset.y,
+        );
+        let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
+        let mut card = Card::new(id, snapped_position);
+        card.content = crate::custom_text_editor::CustomTextEditor::with_text(content);
+        card.icon = icon;
+        card.color = color;
+        // Set the custom size
+        card.width = width;
+        card.height = height;
+        card.target_width = width;
+        card.target_height = height;
+        self.cards.push(card);
+        self.cards_cache.clear();
+        id
+    }
+
     pub fn clear_cards_cache(&mut self) {
         self.cards_cache.clear();
     }

@@ -907,11 +907,13 @@ impl Cards {
                         card.current_position.x + 20.0,
                         card.current_position.y + 20.0,
                     );
-                    let new_card_id = self.dot_grid.add_card_with_content(
+                    let new_card_id = self.dot_grid.add_card_with_size(
                         new_pos,
                         card.content.text(),
                         card.icon,
                         card.color,
+                        card.width,
+                        card.height,
                     );
                     self.selected_card_id = Some(new_card_id);
                     self.dot_grid.clear_cards_cache();
