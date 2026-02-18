@@ -61,7 +61,9 @@ cargo run --release
 | `Ctrl + C` | Copy selected text |
 | `Ctrl + X` | Cut selected text |
 | `Ctrl + V` | Paste text |
+| `Ctrl + 0` | Recenter canvas to origin |
 | `Esc` | Exit editing mode / Close menus |
+| `Middle Mouse Button` | Recenter canvas to origin |
 
 ### Text Editing
 
@@ -175,6 +177,9 @@ When a card is selected, a toolbar appears above it with formatting options:
 
 - **Click and drag** on empty space to pan the canvas
 - **Scroll** to navigate vertically
+- **Recenter the view**: Use `Ctrl+0` or middle-click to instantly return to origin (0, 0)
+  - `Ctrl+0` works everywhere (great for laptops without middle-mouse)
+  - Middle-mouse button or three-finger tap (if your touchpad supports it)
 - Use the **sidebar** to toggle settings and themes
 
 ### Theme & Settings

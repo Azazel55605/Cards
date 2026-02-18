@@ -141,6 +141,7 @@ pub enum Message {
     Tick(Instant),
     DotGridMessage(DotGridMessage),
     EventOccurred(Event),
+    RecenterCanvas,
     // Context menu messages
     ShowContextMenu(Point),
     HideContextMenu,
@@ -475,6 +476,11 @@ impl Cards {
                     }
                 }
             }
+            Message::RecenterCanvas => {
+                // Reset canvas offset to center (0, 0)
+                self.canvas_offset = Vector::new(0.0, 0.0);
+                self.dot_grid.set_offset(self.canvas_offset);
+            }
             Message::EventOccurred(event) => {
                 match event {
                     Event::Window(iced::window::Event::Resized(size)) => {
@@ -556,8 +562,15 @@ impl Cards {
                 // Old text_editor action - no longer used with custom editor
             }
             Message::KeyboardInput(keyboard_event) => {
-                // Check for global Escape key first
-                if let iced::keyboard::Event::KeyPressed { key, .. } = &keyboard_event {
+                // Check for global shortcuts first
+                if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = &keyboard_event {
+                    // Ctrl+0 to recenter canvas (global, works even when not editing)
+                    if modifiers.control() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "0") {
+                        self.canvas_offset = Vector::new(0.0, 0.0);
+                        self.dot_grid.set_offset(self.canvas_offset);
+                        return Task::none();
+                    }
+
                     if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
                         // Close menus/settings/editing - but never quit the app
                         if self.card_icon_menu_position.is_some() {
@@ -900,6 +913,9 @@ impl Cards {
 
             match event {
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) => {
+                    Some(Message::RecenterCanvas)
+                }
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::CloseRequested) => {
                     std::process::exit(0);
