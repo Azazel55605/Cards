@@ -273,6 +273,30 @@ where
 
         mouse::Interaction::default()
     }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        translation: iced::Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, Message, iced::Theme, Renderer>> {
+        let mut children = layout.children();
+        let _base_layout = children.next();
+        let overlay_layout = children.next();
+
+        // Forward overlay requests from the overlay element (which contains SettingsModal)
+        if let Some(overlay_layout) = overlay_layout {
+            self.overlay.as_widget_mut().overlay(
+                &mut tree.children[1],
+                overlay_layout,
+                renderer,
+                translation,
+            )
+        } else {
+            None
+        }
+    }
 }
 
 impl<'a, Message, Renderer> From<Overlay<'a, Message, Renderer>> for Element<'a, Message, iced::Theme, Renderer>

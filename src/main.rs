@@ -17,7 +17,7 @@ mod text_renderer;
 mod markdown_parser;
 mod text_processor;
 
-use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor};
+use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
 use iced::{Border, Color, Shadow};
 use iced::time;
@@ -32,7 +32,7 @@ use overlay::Overlay;
 use sidebar::Sidebar;
 use settings::{SettingsModal, SettingsCategory};
 use svg_style::SvgStyle;
-use config::Config;
+use config::{Config, FontFamily};
 use context_menu::ContextMenu;
 use card::{Card, CardIcon};
 use positioned::Positioned;
@@ -126,6 +126,27 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 const APP_NAME: &str = "Cards";
 const APP_VERSION: &str = "0.1.0";
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FontSize(f32);
+
+impl FontSize {
+    const SIZES: &'static [FontSize] = &[
+        FontSize(10.0),
+        FontSize(12.0),
+        FontSize(14.0),
+        FontSize(16.0),
+        FontSize(18.0),
+        FontSize(20.0),
+        FontSize(24.0),
+    ];
+}
+
+impl std::fmt::Display for FontSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}pt", self.0 as i32)
+    }
+}
+
 pub fn main() -> iced::Result {
     let config = Config::load();
 
@@ -144,6 +165,8 @@ pub enum Message {
     SelectSettingsCategory(SettingsCategory),
     SetSidebarOpenOnStart(bool),
     SetAnimationsEnabled(bool),
+    SetFontFamily(FontFamily),
+    SetFontSize(f32),
     Tick(Instant),
     DotGridMessage(DotGridMessage),
     EventOccurred(Event),
@@ -231,6 +254,11 @@ impl Cards {
             theme.card_border(),
             theme.card_text(),
         );
+        // Set font from config
+        let font = config.appearance.font.family.to_iced_font();
+        println!("DEBUG: Initializing with font family: {:?}, size: {}", config.appearance.font.family, config.appearance.font.size);
+        dot_grid.set_font(font, config.appearance.font.size);
+        println!("DEBUG: Font applied to DotGrid");
 
         let mut cards = Cards {
             theme,
@@ -320,6 +348,26 @@ impl Cards {
                 if let Err(e) = self.config.set_animations_enabled(enabled) {
                     eprintln!("Failed to save animations setting: {}", e);
                 }
+            }
+            Message::SetFontFamily(family) => {
+                println!("DEBUG: SetFontFamily called with {:?}", family);
+                if let Err(e) = self.config.set_font_family(family) {
+                    eprintln!("Failed to save font family setting: {}", e);
+                }
+                // Update DotGrid with new font
+                let font = family.to_iced_font();
+                self.dot_grid.set_font(font, self.config.appearance.font.size);
+                println!("DEBUG: Font applied to DotGrid");
+            }
+            Message::SetFontSize(size) => {
+                println!("DEBUG: SetFontSize called with {}", size);
+                if let Err(e) = self.config.set_font_size(size) {
+                    eprintln!("Failed to save font size setting: {}", e);
+                }
+                // Update DotGrid with new font size
+                let font = self.config.appearance.font.family.to_iced_font();
+                self.dot_grid.set_font(font, size);
+                println!("DEBUG: Font size applied to DotGrid");
             }
             Message::Tick(_instant) => {
                 // Calculate delta time since last tick
@@ -2043,6 +2091,113 @@ impl Cards {
                 .class(dark_btn_style)
                 .on_press(Message::SetTheme(Theme::Dark));
 
+                // Font family dropdown
+                let font_family_label = text("Font Family").size(14);
+
+                let theme = self.theme;
+                let pick_list_style = move |_theme: &IcedTheme, _status: pick_list::Status| {
+                    let background = theme.card_background();
+                    let text_color = theme.card_text();
+                    let border_color = theme.button_border();
+
+                    pick_list::Style {
+                        background: iced::Background::Color(background),
+                        text_color,
+                        placeholder_color: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
+                        handle_color: text_color,
+                        border: Border {
+                            color: border_color,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                    }
+                };
+
+                let menu_style = move |_theme: &IcedTheme| {
+                    let background = theme.card_background();
+                    let text_color = theme.card_text();
+                    let border_color = theme.button_border();
+                    let selected_bg = theme.button_background_hovered();
+
+                    iced::overlay::menu::Style {
+                        background: iced::Background::Color(background),
+                        text_color,
+                        selected_background: iced::Background::Color(selected_bg),
+                        selected_text_color: text_color,
+                        border: Border {
+                            color: border_color,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                    }
+                };
+
+                let font_family_picker = pick_list(
+                    FontFamily::all(),
+                    Some(self.config.appearance.font.family),
+                    Message::SetFontFamily,
+                )
+                .width(200)
+                .text_size(14)
+                .padding(8)
+                .style(pick_list_style)
+                .menu_style(menu_style);
+
+                // Font size dropdown
+                let font_size_label = text("Font Size").size(14);
+                let current_size = FontSize::SIZES
+                    .iter()
+                    .find(|s| (s.0 - self.config.appearance.font.size).abs() < 0.1)
+                    .copied();
+
+                let pick_list_style2 = move |_theme: &IcedTheme, _status: pick_list::Status| {
+                    let background = theme.card_background();
+                    let text_color = theme.card_text();
+                    let border_color = theme.button_border();
+
+                    pick_list::Style {
+                        background: iced::Background::Color(background),
+                        text_color,
+                        placeholder_color: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
+                        handle_color: text_color,
+                        border: Border {
+                            color: border_color,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                    }
+                };
+
+                let menu_style2 = move |_theme: &IcedTheme| {
+                    let background = theme.card_background();
+                    let text_color = theme.card_text();
+                    let border_color = theme.button_border();
+                    let selected_bg = theme.button_background_hovered();
+
+                    iced::overlay::menu::Style {
+                        background: iced::Background::Color(background),
+                        text_color,
+                        selected_background: iced::Background::Color(selected_bg),
+                        selected_text_color: text_color,
+                        border: Border {
+                            color: border_color,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                    }
+                };
+
+                let font_size_picker = pick_list(
+                    FontSize::SIZES,
+                    current_size,
+                    |size: FontSize| Message::SetFontSize(size.0),
+                )
+                .width(100)
+                .text_size(14)
+                .padding(8)
+                .style(pick_list_style2)
+                .menu_style(menu_style2);
+
                 column![
                     text("Appearance").size(16).font(iced::Font {
                         weight: iced::font::Weight::Bold,
@@ -2054,6 +2209,27 @@ impl Cards {
                         Space::with_width(Length::Fill),
                         light_button,
                         dark_button,
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    Space::with_height(20),
+                    text("Fonts").size(14).font(iced::Font {
+                        weight: iced::font::Weight::Semibold,
+                        ..Default::default()
+                    }),
+                    Space::with_height(10),
+                    row![
+                        font_family_label,
+                        Space::with_width(Length::Fill),
+                        font_family_picker,
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    Space::with_height(10),
+                    row![
+                        font_size_label,
+                        Space::with_width(Length::Fill),
+                        font_size_picker,
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),

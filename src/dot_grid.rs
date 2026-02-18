@@ -48,6 +48,8 @@ pub struct DotGrid {
     card_background: Color,
     card_border: Color,
     card_text: Color,
+    font: iced::Font,
+    font_size: f32,
 }
 
 impl DotGrid {
@@ -69,7 +71,22 @@ impl DotGrid {
             card_background: Color::WHITE,
             card_border: Color::from_rgb8(200, 200, 200),
             card_text: Color::from_rgb8(51, 51, 51),
+            font: iced::Font::MONOSPACE,
+            font_size: 14.0,
         }
+    }
+
+    pub fn set_font(&mut self, font: iced::Font, size: f32) {
+        println!("DEBUG: DotGrid.set_font called - size: {}, cards count: {}", size, self.cards.len());
+        self.font = font;
+        self.font_size = size;
+        // Update all existing cards
+        for card in &mut self.cards {
+            card.content.set_font(font, size);
+            println!("DEBUG: Updated card {} with font size {}", card.id, size);
+        }
+        self.cards_cache.clear();
+        println!("DEBUG: Cards cache cleared");
     }
 
     pub fn set_dot_color(&mut self, color: Color) {
@@ -130,7 +147,10 @@ impl DotGrid {
             screen_position.y - self.offset.y,
         );
         let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
-        self.cards.push(Card::new(id, snapped_position));
+        let mut card = Card::new(id, snapped_position);
+        println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
+        card.content.set_font(self.font, self.font_size);
+        self.cards.push(card);
         self.cards_cache.clear();
         println!("Added card {} at world position {:?}", id, snapped_position);
         id
@@ -151,6 +171,8 @@ impl DotGrid {
         let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
         let mut card = Card::new(id, snapped_position);
         card.content = crate::custom_text_editor::CustomTextEditor::with_text(content);
+        println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
+        card.content.set_font(self.font, self.font_size);
         card.icon = icon;
         card.color = color;
         self.cards.push(card);
@@ -175,6 +197,7 @@ impl DotGrid {
         let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
         let mut card = Card::new(id, snapped_position);
         card.content = crate::custom_text_editor::CustomTextEditor::with_text(content);
+        card.content.set_font(self.font, self.font_size);
         card.icon = icon;
         card.color = color;
         // Set the custom size
@@ -355,8 +378,15 @@ impl DotGrid {
                 let text_x = card_rect.x + 10.0;
                 let text_y = card_rect.y + top_bar_height + 10.0;
                 let max_width = card_rect.width - 20.0;
+                let max_height = card_rect.height - top_bar_height - 20.0;
 
-                let renderer = MarkdownRenderer::new(self.card_text, max_width);
+                let renderer = MarkdownRenderer::with_fonts_size_and_height(
+                    self.card_text, 
+                    max_width,
+                    max_height,
+                    self.font, 
+                    self.font_size
+                );
                 renderer.render(frame, &content_text, Point::new(text_x, text_y));
             }
 

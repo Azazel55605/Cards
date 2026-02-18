@@ -23,6 +23,9 @@ pub struct Config {
 pub struct AppearanceConfig {
     #[serde(default = "default_theme")]
     pub theme: ThemeConfig,
+
+    #[serde(default)]
+    pub font: FontConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,9 +54,36 @@ pub enum ThemeConfig {
     Dark,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FontConfig {
+    #[serde(default = "default_font_family")]
+    pub family: FontFamily,
+
+    #[serde(default = "default_font_size")]
+    pub size: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FontFamily {
+    JetBrainsMono,
+    FiraCode,
+    SourceCodePro,
+    DejaVuSansMono,
+    CourierNew,
+}
+
 // Default value functions for serde
 fn default_theme() -> ThemeConfig {
     ThemeConfig::Light
+}
+
+fn default_font_family() -> FontFamily {
+    FontFamily::JetBrainsMono
+}
+
+fn default_font_size() -> f32 {
+    14.0
 }
 
 fn default_true() -> bool {
@@ -72,6 +102,16 @@ impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
             theme: default_theme(),
+            font: FontConfig::default(),
+        }
+    }
+}
+
+impl Default for FontConfig {
+    fn default() -> Self {
+        Self {
+            family: default_font_family(),
+            size: default_font_size(),
         }
     }
 }
@@ -241,6 +281,18 @@ impl Config {
         self.general.enable_animations = enabled;
         self.save()
     }
+
+    /// Update font family and save
+    pub fn set_font_family(&mut self, family: FontFamily) -> Result<(), ConfigError> {
+        self.appearance.font.family = family;
+        self.save()
+    }
+
+    /// Update font size and save
+    pub fn set_font_size(&mut self, size: f32) -> Result<(), ConfigError> {
+        self.appearance.font.size = size;
+        self.save()
+    }
 }
 
 impl From<ThemeConfig> for Theme {
@@ -258,6 +310,67 @@ impl From<Theme> for ThemeConfig {
             Theme::Light => ThemeConfig::Light,
             Theme::Dark => ThemeConfig::Dark,
         }
+    }
+}
+
+impl FontFamily {
+    pub fn all() -> &'static [FontFamily] {
+        &[
+            FontFamily::JetBrainsMono,
+            FontFamily::FiraCode,
+            FontFamily::SourceCodePro,
+            FontFamily::DejaVuSansMono,
+            FontFamily::CourierNew,
+        ]
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FontFamily::JetBrainsMono => "JetBrains Mono",
+            FontFamily::FiraCode => "Fira Code",
+            FontFamily::SourceCodePro => "Source Code Pro",
+            FontFamily::DejaVuSansMono => "DejaVu Sans Mono",
+            FontFamily::CourierNew => "Courier New",
+        }
+    }
+
+    /// Convert to iced::Font
+    /// Maps each font family to an iced::Font
+    /// Note: System needs to have these fonts installed for them to work
+    pub fn to_iced_font(&self) -> iced::Font {
+        match self {
+            FontFamily::JetBrainsMono => iced::Font {
+                family: iced::font::Family::Name("JetBrains Mono"),
+                weight: iced::font::Weight::Normal,
+                ..iced::Font::MONOSPACE
+            },
+            FontFamily::FiraCode => iced::Font {
+                family: iced::font::Family::Name("Fira Code"),
+                weight: iced::font::Weight::Normal,
+                ..iced::Font::MONOSPACE
+            },
+            FontFamily::SourceCodePro => iced::Font {
+                family: iced::font::Family::Name("Source Code Pro"),
+                weight: iced::font::Weight::Normal,
+                ..iced::Font::MONOSPACE
+            },
+            FontFamily::DejaVuSansMono => iced::Font {
+                family: iced::font::Family::Name("DejaVu Sans Mono"),
+                weight: iced::font::Weight::Normal,
+                ..iced::Font::MONOSPACE
+            },
+            FontFamily::CourierNew => iced::Font {
+                family: iced::font::Family::Name("Courier New"),
+                weight: iced::font::Weight::Normal,
+                ..iced::Font::MONOSPACE
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for FontFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 

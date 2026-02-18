@@ -21,8 +21,14 @@ pub struct TextStyle {
 
 impl Default for TextStyle {
     fn default() -> Self {
+        Self::with_base_size(14.0)
+    }
+}
+
+impl TextStyle {
+    pub fn with_base_size(base_size: f32) -> Self {
         Self {
-            size: 12.0,
+            size: base_size,
             bold: false,
             italic: false,
             strikethrough: false,
@@ -31,22 +37,24 @@ impl Default for TextStyle {
             color: None,
         }
     }
-}
 
-impl TextStyle {
     pub fn heading(level: u32) -> Self {
-        let size = match level {
-            1 => 20.0,
-            2 => 18.0,
-            3 => 16.0,
-            4 => 14.0,
-            5 => 13.0,
-            _ => 12.0,
+        Self::heading_with_base(level, 14.0)
+    }
+
+    pub fn heading_with_base(level: u32, base_size: f32) -> Self {
+        let size_multiplier = match level {
+            1 => 1.43,  // 20/14
+            2 => 1.29,  // 18/14
+            3 => 1.14,  // 16/14
+            4 => 1.0,   // 14/14
+            5 => 0.93,  // 13/14
+            _ => 0.86,  // 12/14
         };
         Self {
-            size,
+            size: base_size * size_multiplier,
             bold: true,
-            ..Default::default()
+            ..Self::with_base_size(base_size)
         }
     }
 

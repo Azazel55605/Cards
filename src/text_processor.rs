@@ -8,9 +8,17 @@ pub struct TextProcessor {
 
 impl TextProcessor {
     pub fn new() -> Self {
+        Self::with_font_size(14.0)
+    }
+
+    pub fn with_font_size(font_size: f32) -> Self {
         Self {
-            markdown_parser: MarkdownParser::new(),
+            markdown_parser: MarkdownParser::with_font_size(font_size),
         }
+    }
+
+    pub fn set_font_size(&mut self, font_size: f32) {
+        self.markdown_parser.set_base_font_size(font_size);
     }
 
     /// Process text that may contain <md>...</md> tags
@@ -65,7 +73,7 @@ impl TextProcessor {
             return;
         }
 
-        let default_style = TextStyle::default();
+        let default_style = TextStyle::with_base_size(self.markdown_parser.base_font_size);
 
         for line in text.lines() {
             if line.trim().is_empty() {

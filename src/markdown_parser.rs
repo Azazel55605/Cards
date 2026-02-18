@@ -11,10 +11,15 @@ pub struct MarkdownParser {
     options: Options,
     syntax_set: SyntaxSet,
     theme: syntect::highlighting::Theme,
+    pub base_font_size: f32,
 }
 
 impl MarkdownParser {
     pub fn new() -> Self {
+        Self::with_font_size(14.0)
+    }
+
+    pub fn with_font_size(base_font_size: f32) -> Self {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_STRIKETHROUGH);
         options.insert(Options::ENABLE_TABLES);
@@ -30,7 +35,12 @@ impl MarkdownParser {
             options,
             syntax_set,
             theme,
+            base_font_size,
         }
+    }
+
+    pub fn set_base_font_size(&mut self, size: f32) {
+        self.base_font_size = size;
     }
 
     /// Parse markdown text into a TextDocument
@@ -39,7 +49,7 @@ impl MarkdownParser {
         let mut document = TextDocument::new();
         let mut current_line = TextLine::new();
         let mut text_buffer = String::new();
-        let mut current_style = TextStyle::default();
+        let mut current_style = TextStyle::with_base_size(self.base_font_size);
         let mut in_list = false;
         let mut in_code_block = false;
         let mut code_block_lang: Option<String> = None;
@@ -65,7 +75,7 @@ impl MarkdownParser {
                                 HeadingLevel::H5 => 5,
                                 HeadingLevel::H6 => 6,
                             };
-                            current_style = TextStyle::heading(level_num);
+                            current_style = TextStyle::heading_with_base(level_num, self.base_font_size);
                             current_line = TextLine::new().with_spacing_before(8.0).with_spacing_after(4.0);
                         }
                         Tag::Strong => {
@@ -119,7 +129,7 @@ impl MarkdownParser {
                         }
                         Tag::Heading(_, _, _) => {
                             self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
-                            current_style = TextStyle::default();
+                            current_style = TextStyle::with_base_size(self.base_font_size);
                             current_line = TextLine::new();
                         }
                         Tag::Strong => {
@@ -155,7 +165,7 @@ impl MarkdownParser {
                             in_code_block = false;
                             code_block_lang = None;
                             code_block_content.clear();
-                            current_style = TextStyle::default();
+                            current_style = TextStyle::with_base_size(self.base_font_size);
                             current_line = TextLine::new().with_spacing_after(4.0);
                         }
                         _ => {}
@@ -188,7 +198,7 @@ impl MarkdownParser {
                     self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
                     // Add a horizontal rule line (represented as special text for now)
                     let mut rule_line = TextLine::new().with_spacing_before(8.0).with_spacing_after(8.0);
-                    rule_line.add_segment("─".repeat(50), TextStyle::default());
+                    rule_line.add_segment("─".repeat(50), TextStyle::with_base_size(self.base_font_size));
                     document.add_line(rule_line);
                     current_line = TextLine::new();
                 }

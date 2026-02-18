@@ -2,20 +2,9 @@ use iced::widget::canvas::{Path, Frame, Stroke, Text};
 use iced::{Color, Point, Rectangle};
 use std::time::Instant;
 
-// ============================================================================
-// FONT CONFIGURATION - Customize fonts here
-// ============================================================================
-// To change the editor font:
-// 1. Change EDITOR_FONT to desired font (e.g., iced::Font::default() for system font)
-// 2. Adjust CHAR_WIDTH to match the new font's average character width
-//    - For monospace fonts: measure actual width (current: 8.43 for monospace at 14px)
-//    - For proportional fonts: use average width estimation (~7.5 for system font at 14px)
-// 3. Test cursor positioning and word wrapping with the new font
-// ============================================================================
-const EDITOR_FONT: iced::Font = iced::Font::MONOSPACE;
-const CHAR_WIDTH: f32 = 8.43; // Character width for current font at 14px
-const FONT_SIZE: f32 = 14.0;
-const LINE_HEIGHT: f32 = 21.0;
+// Default font configuration
+const DEFAULT_CHAR_WIDTH: f32 = 8.43; // Character width for monospace at 14px
+const DEFAULT_LINE_HEIGHT: f32 = 21.0;
 
 /// A simple custom text editor with visible cursor
 #[derive(Debug, Clone)]
@@ -25,6 +14,10 @@ pub struct CustomTextEditor {
     pub last_blink: Instant,
     pub selection_start: Option<usize>,
     pub scroll_offset: usize, // Line offset for scrolling
+    pub font: iced::Font,
+    pub font_size: f32,
+    pub char_width: f32,
+    pub line_height: f32,
 }
 
 impl Default for CustomTextEditor {
@@ -35,6 +28,10 @@ impl Default for CustomTextEditor {
             last_blink: Instant::now(),
             selection_start: None,
             scroll_offset: 0,
+            font: iced::Font::MONOSPACE,
+            font_size: 14.0,
+            char_width: DEFAULT_CHAR_WIDTH,
+            line_height: DEFAULT_LINE_HEIGHT,
         }
     }
 }
@@ -52,7 +49,22 @@ impl CustomTextEditor {
             last_blink: Instant::now(),
             selection_start: None,
             scroll_offset: 0,
+            font: iced::Font::MONOSPACE,
+            font_size: 14.0,
+            char_width: DEFAULT_CHAR_WIDTH,
+            line_height: DEFAULT_LINE_HEIGHT,
         }
+    }
+
+    pub fn set_font(&mut self, font: iced::Font, size: f32) {
+        println!("DEBUG: CustomTextEditor.set_font called - old size: {}, new size: {}", self.font_size, size);
+        self.font = font;
+        self.font_size = size;
+        // Adjust char width and line height based on font size
+        let size_ratio = size / 14.0;
+        self.char_width = DEFAULT_CHAR_WIDTH * size_ratio;
+        self.line_height = DEFAULT_LINE_HEIGHT * size_ratio;
+        println!("DEBUG: Font updated - char_width: {}, line_height: {}", self.char_width, self.line_height);
     }
 
     pub fn text(&self) -> &str {
@@ -449,7 +461,7 @@ impl CustomTextEditor {
         let max_height = bounds.height - (padding * 2.0);
 
         // Calculate how many lines can fit
-        let max_lines = ((max_height / LINE_HEIGHT).floor() as usize).max(1);
+        let max_lines = ((max_height / self.line_height).floor() as usize).max(1);
 
         // Wrap text and build position map
         let (wrapped_lines, position_map) = self.wrap_and_map_positions(&self.text, max_width);
@@ -502,7 +514,7 @@ impl CustomTextEditor {
                 // Check if this line contains selection
                 if sel_end >= line_start && sel_begin <= line_end {
                     let display_idx = line_idx - visible_start;
-                    let y = text_y + (display_idx as f32 * LINE_HEIGHT);
+                    let y = text_y + (display_idx as f32 * self.line_height);
 
                     // Calculate selection range within this line using character counts
                     let line_text_start = if line_start <= self.text.len() { line_start } else { self.text.len() };
@@ -525,15 +537,15 @@ impl CustomTextEditor {
                         0
                     };
 
-                    let sel_x_start = text_x + (chars_before_sel as f32 * CHAR_WIDTH);
-                    let sel_x_end = text_x + ((chars_before_sel + chars_in_sel) as f32 * CHAR_WIDTH);
+                    let sel_x_start = text_x + (chars_before_sel as f32 * self.char_width);
+                    let sel_x_end = text_x + ((chars_before_sel + chars_in_sel) as f32 * self.char_width);
 
                     // Draw selection rectangle
                     use iced::widget::canvas::{path::Builder, Fill};
                     let mut path_builder = Builder::new();
                     path_builder.rectangle(
                         Point::new(sel_x_start, y),
-                        iced::Size::new(sel_x_end - sel_x_start, LINE_HEIGHT)
+                        iced::Size::new(sel_x_end - sel_x_start, self.line_height)
                     );
                     let selection_path = path_builder.build();
 
@@ -548,14 +560,14 @@ impl CustomTextEditor {
         // Draw text line by line (only visible lines)
         for (line_idx, line) in wrapped_lines.iter().enumerate().skip(visible_start).take(visible_end - visible_start) {
             let display_idx = line_idx - visible_start;
-            let y = text_y + (display_idx as f32 * LINE_HEIGHT);
+            let y = text_y + (display_idx as f32 * self.line_height);
 
             frame.fill_text(Text {
                 content: line.clone(),
                 position: Point::new(text_x, y),
                 color: text_color,
-                size: FONT_SIZE.into(),
-                font: EDITOR_FONT,
+                size: self.font_size.into(),
+                font: self.font,
                 shaping: iced::widget::text::Shaping::Advanced,
                 ..Default::default()
             });
@@ -569,12 +581,12 @@ impl CustomTextEditor {
 
             if should_show_cursor {
                 let display_line = cursor_line_idx - visible_start;
-                let cursor_x = text_x + (cursor_col as f32 * CHAR_WIDTH);
-                let cursor_y = text_y + (display_line as f32 * LINE_HEIGHT);
+                let cursor_x = text_x + (cursor_col as f32 * self.char_width);
+                let cursor_y = text_y + (display_line as f32 * self.line_height);
 
                 let cursor_path = Path::line(
                     Point::new(cursor_x, cursor_y),
-                    Point::new(cursor_x, cursor_y + FONT_SIZE),
+                    Point::new(cursor_x, cursor_y + self.font_size),
                 );
 
                 frame.stroke(
@@ -590,7 +602,7 @@ impl CustomTextEditor {
     /// Update scroll offset - call this from update loop
     pub fn update_scroll(&mut self, bounds: Rectangle) {
         let max_height = bounds.height - 20.0;
-        let max_lines = ((max_height / LINE_HEIGHT).floor() as usize).max(1);
+        let max_lines = ((max_height / self.line_height).floor() as usize).max(1);
         let max_width = bounds.width - 20.0;
 
         let (wrapped_lines, position_map) = self.wrap_and_map_positions(&self.text, max_width);
@@ -617,7 +629,7 @@ impl CustomTextEditor {
 
     /// Wrap text and build a position map: (line_idx, col_in_line, original_start_pos, original_end_pos)
     fn wrap_and_map_positions(&self, text: &str, max_width: f32) -> (Vec<String>, Vec<(usize, usize, usize, usize)>) {
-        let max_chars = ((max_width / CHAR_WIDTH).floor() as usize).max(1);
+        let max_chars = ((max_width / self.char_width).floor() as usize).saturating_sub(1).max(1);
 
         let mut wrapped_lines = Vec::new();
         let mut position_map = Vec::new();
@@ -631,25 +643,45 @@ impl CustomTextEditor {
                 continue;
             }
 
-            // Process character by character to preserve ALL spaces
             let mut line = String::new();
             let mut line_start_pos = original_pos;
-            
-            for ch in paragraph.chars() {
+            let chars: Vec<char> = paragraph.chars().collect();
+            let mut i = 0;
+
+            while i < chars.len() {
+                let ch = chars[i];
+
                 // Check if adding this character would exceed max width
                 if line.chars().count() >= max_chars {
-                    // Flush current line
-                    let line_end_pos = line_start_pos + line.len();
-                    position_map.push((wrapped_lines.len(), 0, line_start_pos, line_end_pos));
-                    wrapped_lines.push(line.clone());
-                    
-                    // Start new line
-                    line.clear();
-                    line_start_pos = line_end_pos;
+                    // Try to find last space in current line to break there
+                    if let Some(last_space_idx) = line.rfind(' ') {
+                        // Break at space
+                        let before_space = line[..last_space_idx].to_string();
+                        let after_space = line[last_space_idx + 1..].to_string();
+
+                        if !before_space.is_empty() {
+                            let line_end_pos = line_start_pos + before_space.len() + 1; // +1 for space
+                            position_map.push((wrapped_lines.len(), 0, line_start_pos, line_end_pos));
+                            wrapped_lines.push(before_space);
+
+                            // Start new line with remainder after space
+                            line = after_space;
+                            line_start_pos = line_end_pos;
+                        }
+                    } else {
+                        // No space found, break at character boundary (long word)
+                        let line_end_pos = line_start_pos + line.len();
+                        position_map.push((wrapped_lines.len(), 0, line_start_pos, line_end_pos));
+                        wrapped_lines.push(line.clone());
+
+                        line.clear();
+                        line_start_pos = line_end_pos;
+                    }
                 }
                 
-                // Add the character (including spaces!)
+                // Add the character
                 line.push(ch);
+                i += 1;
             }
 
             // Flush remaining line

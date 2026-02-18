@@ -269,16 +269,14 @@ where
                         viewport,
                     );
 
-                    // Always capture if within modal bounds to prevent background interaction
-                    if status == iced::event::Status::Captured {
-                        return status;
-                    }
-                    return iced::event::Status::Captured;
+                    // Return the status from the content widget
+                    // This allows pick_list and other interactive widgets to work
+                    return status;
                 }
             }
         }
 
-        // Capture all mouse events to prevent interaction with background
+        // Only capture mouse events outside the modal to prevent background interaction
         match event {
             Event::Mouse(_) => iced::event::Status::Captured,
             _ => iced::event::Status::Ignored,
@@ -325,6 +323,35 @@ where
         }
 
         mouse::Interaction::default()
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        translation: Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, Message, iced::Theme, Renderer>> {
+        let full_bounds = layout.bounds();
+        let modal_x = (full_bounds.width - self.width) / 2.0;
+        let modal_y = (full_bounds.height - self.height) / 2.0;
+
+        if let Some(content_layout) = layout.children().next() {
+            // Calculate the translation for the modal content
+            let modal_translation = Vector::new(
+                translation.x + modal_x,
+                translation.y + modal_y,
+            );
+
+            self.content.as_widget_mut().overlay(
+                &mut tree.children[0],
+                content_layout,
+                renderer,
+                modal_translation,
+            )
+        } else {
+            None
+        }
     }
 }
 
