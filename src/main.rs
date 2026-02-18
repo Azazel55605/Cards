@@ -629,13 +629,21 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowLeft) => {
-                                        // eprintln!("-> ArrowLeft (Shift: {})", modifiers.shift());
-                                        card.content.move_cursor_left(modifiers.shift());
+                                        // eprintln!("-> ArrowLeft (Ctrl: {}, Shift: {})", modifiers.control(), modifiers.shift());
+                                        if modifiers.control() {
+                                            card.content.move_cursor_word_left(modifiers.shift());
+                                        } else {
+                                            card.content.move_cursor_left(modifiers.shift());
+                                        }
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowRight) => {
-                                        // eprintln!("-> ArrowRight (Shift: {})", modifiers.shift());
-                                        card.content.move_cursor_right(modifiers.shift());
+                                        // eprintln!("-> ArrowRight (Ctrl: {}, Shift: {})", modifiers.control(), modifiers.shift());
+                                        if modifiers.control() {
+                                            card.content.move_cursor_word_right(modifiers.shift());
+                                        } else {
+                                            card.content.move_cursor_right(modifiers.shift());
+                                        }
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowUp) => {

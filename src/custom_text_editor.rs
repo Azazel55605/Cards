@@ -220,6 +220,86 @@ impl CustomTextEditor {
         self.last_blink = Instant::now();
     }
 
+    pub fn move_cursor_word_left(&mut self, shift: bool) {
+        if shift {
+            if self.selection_start.is_none() {
+                self.selection_start = Some(self.cursor_position);
+            }
+        } else {
+            self.selection_start = None;
+        }
+
+        if self.cursor_position > 0 {
+            let before_cursor = &self.text[..self.cursor_position];
+            let mut pos = self.cursor_position;
+
+            // Skip trailing whitespace
+            while pos > 0 {
+                if let Some(ch) = before_cursor.chars().nth_back((self.cursor_position - pos) as usize) {
+                    if !ch.is_whitespace() {
+                        break;
+                    }
+                    pos -= ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+
+            // Skip word characters
+            while pos > 0 {
+                if let Some(ch) = before_cursor.chars().nth_back((self.cursor_position - pos) as usize) {
+                    if ch.is_whitespace() {
+                        break;
+                    }
+                    pos -= ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+
+            self.cursor_position = pos;
+        }
+        self.last_blink = Instant::now();
+    }
+
+    pub fn move_cursor_word_right(&mut self, shift: bool) {
+        if shift {
+            if self.selection_start.is_none() {
+                self.selection_start = Some(self.cursor_position);
+            }
+        } else {
+            self.selection_start = None;
+        }
+
+        if self.cursor_position < self.text.len() {
+            let after_cursor = &self.text[self.cursor_position..];
+            let mut chars_to_move = 0;
+            let mut found_word = false;
+
+            // Skip leading whitespace
+            for ch in after_cursor.chars() {
+                if !ch.is_whitespace() {
+                    found_word = true;
+                    break;
+                }
+                chars_to_move += ch.len_utf8();
+            }
+
+            // Skip word characters
+            if found_word {
+                for ch in after_cursor[chars_to_move..].chars() {
+                    if ch.is_whitespace() {
+                        break;
+                    }
+                    chars_to_move += ch.len_utf8();
+                }
+            }
+
+            self.cursor_position += chars_to_move;
+        }
+        self.last_blink = Instant::now();
+    }
+
     pub fn move_cursor_up(&mut self) {
         // Find current line start
         let before_cursor = &self.text[..self.cursor_position];
