@@ -2,6 +2,20 @@ use iced::widget::canvas::{Frame, Text, Path, Stroke};
 use iced::{Color, Point, alignment};
 use crate::text_document::{TextDocument, TextLine, TextSegment, TextStyle};
 
+// ============================================================================
+// FONT CONFIGURATION - Customize fonts here
+// ============================================================================
+// To change markdown renderer fonts:
+// 1. RENDERER_FONT_REGULAR: Font for regular markdown text (headings, bold, italic, etc.)
+// 2. RENDERER_FONT_CODE: Font for code blocks and inline code
+//
+// Note: Currently both are monospace for consistency. You can make them different:
+// - RENDERER_FONT_REGULAR = iced::Font::default() for proportional text
+// - RENDERER_FONT_CODE = iced::Font::MONOSPACE for code alignment
+// ============================================================================
+const RENDERER_FONT_REGULAR: iced::Font = iced::Font::MONOSPACE;
+const RENDERER_FONT_CODE: iced::Font = iced::Font::MONOSPACE;
+
 /// General text renderer - renders styled text documents
 pub struct TextRenderer {
     pub text_color: Color,
@@ -58,7 +72,7 @@ impl TextRenderer {
         // Build segments for this visual line, wrapping as needed
         for segment in &line.segments {
             let char_width = segment.style.size * avg_char_width_multiplier;
-            
+
             // For code blocks, preserve all spaces and don't word-wrap
             if segment.style.is_code {
                 // Render code as-is without word wrapping
@@ -117,28 +131,33 @@ impl TextRenderer {
 
     fn render_text_segment(&self, frame: &mut Frame, text: &str, x: f32, y: f32, style: TextStyle) {
         let font = if style.is_code {
-            iced::Font {
-                family: iced::font::Family::Monospace,
-                ..Default::default()
-            }
+            // Code blocks use code font (currently monospace)
+            RENDERER_FONT_CODE
         } else if style.bold && style.italic {
+            // Regular text with bold+italic (using monospace base)
             iced::Font {
+                family: RENDERER_FONT_REGULAR.family,
                 weight: iced::font::Weight::Bold,
                 style: iced::font::Style::Italic,
                 ..Default::default()
             }
         } else if style.bold {
+            // Regular text with bold (using monospace base)
             iced::Font {
+                family: RENDERER_FONT_REGULAR.family,
                 weight: iced::font::Weight::Bold,
                 ..Default::default()
             }
         } else if style.italic {
+            // Regular text with italic (using monospace base)
             iced::Font {
+                family: RENDERER_FONT_REGULAR.family,
                 style: iced::font::Style::Italic,
                 ..Default::default()
             }
         } else {
-            iced::Font::default()
+            // Regular text (currently monospace)
+            RENDERER_FONT_REGULAR
         };
 
         let text_color = style.color.unwrap_or_else(|| {

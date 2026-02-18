@@ -2,8 +2,18 @@ use iced::widget::canvas::{Path, Frame, Stroke, Text};
 use iced::{Color, Point, Rectangle};
 use std::time::Instant;
 
-// Monospace font metrics
-const MONOSPACE_CHAR_WIDTH: f32 = 8.43; // Precise width for Iced's monospace at 14px
+// ============================================================================
+// FONT CONFIGURATION - Customize fonts here
+// ============================================================================
+// To change the editor font:
+// 1. Change EDITOR_FONT to desired font (e.g., iced::Font::default() for system font)
+// 2. Adjust CHAR_WIDTH to match the new font's average character width
+//    - For monospace fonts: measure actual width (current: 8.43 for monospace at 14px)
+//    - For proportional fonts: use average width estimation (~7.5 for system font at 14px)
+// 3. Test cursor positioning and word wrapping with the new font
+// ============================================================================
+const EDITOR_FONT: iced::Font = iced::Font::MONOSPACE;
+const CHAR_WIDTH: f32 = 8.43; // Character width for current font at 14px
 const FONT_SIZE: f32 = 14.0;
 const LINE_HEIGHT: f32 = 21.0;
 
@@ -515,8 +525,8 @@ impl CustomTextEditor {
                         0
                     };
 
-                    let sel_x_start = text_x + (chars_before_sel as f32 * MONOSPACE_CHAR_WIDTH);
-                    let sel_x_end = text_x + ((chars_before_sel + chars_in_sel) as f32 * MONOSPACE_CHAR_WIDTH);
+                    let sel_x_start = text_x + (chars_before_sel as f32 * CHAR_WIDTH);
+                    let sel_x_end = text_x + ((chars_before_sel + chars_in_sel) as f32 * CHAR_WIDTH);
 
                     // Draw selection rectangle
                     use iced::widget::canvas::{path::Builder, Fill};
@@ -545,7 +555,7 @@ impl CustomTextEditor {
                 position: Point::new(text_x, y),
                 color: text_color,
                 size: FONT_SIZE.into(),
-                font: iced::Font::MONOSPACE,
+                font: EDITOR_FONT,
                 shaping: iced::widget::text::Shaping::Advanced,
                 ..Default::default()
             });
@@ -559,7 +569,7 @@ impl CustomTextEditor {
 
             if should_show_cursor {
                 let display_line = cursor_line_idx - visible_start;
-                let cursor_x = text_x + (cursor_col as f32 * MONOSPACE_CHAR_WIDTH);
+                let cursor_x = text_x + (cursor_col as f32 * CHAR_WIDTH);
                 let cursor_y = text_y + (display_line as f32 * LINE_HEIGHT);
 
                 let cursor_path = Path::line(
@@ -607,7 +617,7 @@ impl CustomTextEditor {
 
     /// Wrap text and build a position map: (line_idx, col_in_line, original_start_pos, original_end_pos)
     fn wrap_and_map_positions(&self, text: &str, max_width: f32) -> (Vec<String>, Vec<(usize, usize, usize, usize)>) {
-        let max_chars = ((max_width / MONOSPACE_CHAR_WIDTH).floor() as usize).max(1);
+        let max_chars = ((max_width / CHAR_WIDTH).floor() as usize).max(1);
 
         let mut wrapped_lines = Vec::new();
         let mut position_map = Vec::new();
