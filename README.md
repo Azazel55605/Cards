@@ -1,6 +1,6 @@
 # Cards
 
-A beautiful, fast, and minimal note-taking application inspired by [Nova](https://nova.lightmode.io/), built with Rust and [Iced](https://iced.rs/).
+A beautiful, fast, and minimal note-taking application built with Rust and [Iced](https://iced.rs/).
 
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge)
@@ -216,8 +216,6 @@ Configuration is stored in:
 - **macOS**: `~/Library/Application Support/cards/config.toml`
 - **Windows**: `%APPDATA%\cards\config.toml`
 
-Card data is saved in the same directory as `cards.json`.
-
 ## 📝 Tips & Tricks
 
 1. **Quick Markdown**: Type `<md>` and the closing tag auto-completes with the cursor positioned perfectly
@@ -230,13 +228,8 @@ Card data is saved in the same directory as `cards.json`.
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## 🙏 Acknowledgments
 
-- Inspired by [Nova](https://nova.lightmode.io/)
 - Built with the amazing [Iced](https://iced.rs/) framework
 - Icons provided by [Bootstrap Icons](https://icons.getbootstrap.com/)
 
