@@ -547,8 +547,8 @@ impl Cards {
                 self.editing_card_id = Some(card_id);
                 if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                     card.is_editing = true;
-                    // Select all text when starting to edit
-                    card.content.select_all();
+                    // Move cursor to end of text
+                    card.content.move_cursor_to_end();
                 }
                 self.dot_grid.clear_cards_cache();
             }
@@ -675,8 +675,8 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Tab) => {
-                                        // eprintln!("-> Tab key");
-                                        card.content.insert_char('\t');
+                                        // Insert 4 spaces instead of a tab character
+                                        card.content.insert_text("    ");
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Escape) => {
@@ -749,6 +749,22 @@ impl Cards {
                                             }
                                         } else if matches!(key, Key::Named(iced::keyboard::key::Named::Space)) {
                                             card.content.insert_char(' ');
+                                        }
+
+                                        // Auto-complete <md> tags
+                                        // Check if we just typed '>' and if the text before cursor is '<md'
+                                        let current_text = card.content.text();
+                                        let cursor_pos = card.content.cursor_position;
+
+                                        // Check if we just typed '>' (text ends with '<md>')
+                                        if cursor_pos >= 4 && cursor_pos <= current_text.len() {
+                                            let before_cursor = &current_text[..cursor_pos];
+                                            if before_cursor.ends_with("<md>") {
+                                                // Insert newline, empty line, closing tag
+                                                card.content.insert_text("\n\n</md>");
+                                                // Move cursor back to the empty line
+                                                card.content.cursor_position = cursor_pos + 1;
+                                            }
                                         }
                                     }
                                 }

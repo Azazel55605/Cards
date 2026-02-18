@@ -1,9 +1,16 @@
-use pulldown_cmark::{Parser, Event, Tag, HeadingLevel, Options};
+use pulldown_cmark::{Parser, Event, Tag, HeadingLevel, Options, CodeBlockKind};
 use crate::text_document::{TextDocument, TextLine, TextStyle};
+use iced::Color;
+use syntect::parsing::SyntaxSet;
+use syntect::highlighting::ThemeSet;
+use syntect::easy::HighlightLines;
+use syntect::util::LinesWithEndings;
 
 /// Markdown parser that converts markdown to a TextDocument
 pub struct MarkdownParser {
     options: Options,
+    syntax_set: SyntaxSet,
+    theme: syntect::highlighting::Theme,
 }
 
 impl MarkdownParser {
@@ -13,7 +20,17 @@ impl MarkdownParser {
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_TASKLISTS);
 
-        Self { options }
+        // Load syntax definitions and theme
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let theme_set = ThemeSet::load_defaults();
+        // Use a theme that works well with both light and dark backgrounds
+        let theme = theme_set.themes["base16-ocean.dark"].clone();
+
+        Self {
+            options,
+            syntax_set,
+            theme,
+        }
     }
 
     /// Parse markdown text into a TextDocument
@@ -25,6 +42,8 @@ impl MarkdownParser {
         let mut current_style = TextStyle::default();
         let mut in_list = false;
         let mut in_code_block = false;
+        let mut code_block_lang: Option<String> = None;
+        let mut code_block_content = String::new();
 
         for event in parser {
             match event {
@@ -71,11 +90,23 @@ impl MarkdownParser {
                             current_line = TextLine::new().with_indent(10.0);
                             text_buffer.push_str("• ");
                         }
-                        Tag::CodeBlock(_) => {
+                        Tag::CodeBlock(kind) => {
                             self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
                             in_code_block = true;
-                            current_style = TextStyle::code();
-                            current_line = TextLine::new().with_indent(10.0).with_spacing_before(4.0);
+
+                            // Extract language from code block kind
+                            code_block_lang = match kind {
+                                CodeBlockKind::Fenced(lang) => {
+                                    if lang.is_empty() {
+                                        None
+                                    } else {
+                                        Some(lang.to_string())
+                                    }
+                                }
+                                CodeBlockKind::Indented => None,
+                            };
+
+                            code_block_content.clear();
                         }
                         _ => {}
                     }
@@ -112,8 +143,18 @@ impl MarkdownParser {
                             current_line = TextLine::new().with_spacing_after(4.0);
                         }
                         Tag::CodeBlock(_) => {
-                            self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
+                            // Process the collected code block content with syntax highlighting
+                            if !code_block_content.is_empty() {
+                                self.add_highlighted_code_block(
+                                    &mut document,
+                                    &code_block_content,
+                                    code_block_lang.as_deref(),
+                                );
+                            }
+
                             in_code_block = false;
+                            code_block_lang = None;
+                            code_block_content.clear();
                             current_style = TextStyle::default();
                             current_line = TextLine::new().with_spacing_after(4.0);
                         }
@@ -121,7 +162,12 @@ impl MarkdownParser {
                     }
                 }
                 Event::Text(text) => {
-                    text_buffer.push_str(&text);
+                    if in_code_block {
+                        // Collect code block content for later highlighting
+                        code_block_content.push_str(&text);
+                    } else {
+                        text_buffer.push_str(&text);
+                    }
                 }
                 Event::Code(code) => {
                     self.flush_text_to_line(&mut current_line, &mut text_buffer, &current_style);
@@ -175,6 +221,74 @@ impl MarkdownParser {
             document.add_line(line.clone());
             *line = TextLine::new();
         }
+    }
+
+    /// Apply syntax highlighting to a code block
+    fn add_highlighted_code_block(
+        &self,
+        document: &mut TextDocument,
+        code: &str,
+        language: Option<&str>,
+    ) {
+        // Try to find the syntax definition for the language
+        let syntax = if let Some(lang) = language {
+            self.syntax_set
+                .find_syntax_by_token(lang)
+                .or_else(|| self.syntax_set.find_syntax_by_extension(lang))
+        } else {
+            None
+        };
+
+        if let Some(syntax) = syntax {
+            // Syntax highlighting available
+            let mut highlighter = HighlightLines::new(syntax, &self.theme);
+
+            for line in LinesWithEndings::from(code) {
+                let mut text_line = TextLine::new()
+                    .with_indent(10.0)
+                    .with_spacing_before(2.0);
+
+                // Highlight the line
+                if let Ok(ranges) = highlighter.highlight_line(line, &self.syntax_set) {
+                    for (style, text) in ranges {
+                        let color = Color::from_rgb8(
+                            style.foreground.r,
+                            style.foreground.g,
+                            style.foreground.b,
+                        );
+
+                        let text_style = TextStyle {
+                            is_code: true,
+                            color: Some(color),
+                            ..Default::default()
+                        };
+
+                        // Remove trailing newline from text for cleaner rendering
+                        let text = text.trim_end_matches('\n').trim_end_matches('\r');
+                        if !text.is_empty() {
+                            text_line.add_segment(text.to_string(), text_style);
+                        }
+                    }
+                }
+
+                // Add the line even if empty (to preserve code structure)
+                document.add_line(text_line);
+            }
+        } else {
+            // No syntax highlighting available, render as plain code
+            for line in code.lines() {
+                let mut text_line = TextLine::new()
+                    .with_indent(10.0)
+                    .with_spacing_before(2.0);
+
+                let code_style = TextStyle::code();
+                text_line.add_segment(line.to_string(), code_style);
+                document.add_line(text_line);
+            }
+        }
+
+        // Add spacing after code block
+        document.add_line(TextLine::new().with_spacing_after(4.0));
     }
 }
 

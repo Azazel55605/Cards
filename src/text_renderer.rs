@@ -58,36 +58,45 @@ impl TextRenderer {
         // Build segments for this visual line, wrapping as needed
         for segment in &line.segments {
             let char_width = segment.style.size * avg_char_width_multiplier;
-            let words: Vec<&str> = segment.text.split_whitespace().collect();
+            
+            // For code blocks, preserve all spaces and don't word-wrap
+            if segment.style.is_code {
+                // Render code as-is without word wrapping
+                line_segments.push((segment.text.clone(), segment.style, current_x));
+                current_x += segment.text.len() as f32 * char_width;
+            } else {
+                // Normal text - word wrap
+                let words: Vec<&str> = segment.text.split_whitespace().collect();
 
-            for (i, word) in words.iter().enumerate() {
-                let word_width = word.len() as f32 * char_width;
-                let space_width = char_width;
-                let needs_space = i > 0 || !line_segments.is_empty();
-                let total_width = word_width + if needs_space { space_width } else { 0.0 };
+                for (i, word) in words.iter().enumerate() {
+                    let word_width = word.len() as f32 * char_width;
+                    let space_width = char_width;
+                    let needs_space = i > 0 || !line_segments.is_empty();
+                    let total_width = word_width + if needs_space { space_width } else { 0.0 };
 
-                // Check if word fits on current line
-                if current_x + total_width > x + self.max_width && !line_segments.is_empty() {
-                    // Render current line
-                    self.render_segments(frame, &line_segments, current_y);
-                    line_segments.clear();
-                    current_x = x;
-                    current_y += line_height;
-                }
-
-                // Add space if needed
-                if needs_space {
-                    if !line_segments.is_empty() {
-                        if let Some(last) = line_segments.last_mut() {
-                            last.0.push(' ');
-                        }
+                    // Check if word fits on current line
+                    if current_x + total_width > x + self.max_width && !line_segments.is_empty() {
+                        // Render current line
+                        self.render_segments(frame, &line_segments, current_y);
+                        line_segments.clear();
+                        current_x = x;
+                        current_y += line_height;
                     }
-                    current_x += space_width;
-                }
 
-                // Add word
-                line_segments.push((word.to_string(), segment.style, current_x));
-                current_x += word_width;
+                    // Add space if needed
+                    if needs_space {
+                        if !line_segments.is_empty() {
+                            if let Some(last) = line_segments.last_mut() {
+                                last.0.push(' ');
+                            }
+                        }
+                        current_x += space_width;
+                    }
+
+                    // Add word
+                    line_segments.push((word.to_string(), segment.style, current_x));
+                    current_x += word_width;
+                }
             }
         }
 

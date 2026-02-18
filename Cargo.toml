@@ -12,6 +12,7 @@ pulldown-cmark = "0.9"
 icondata = "0.1"
 icondata_core = "0.1"
 icondata_bs = "0.1.0"
+syntect = "5.2"
 
 [profile.dev]
 opt-level = 2
