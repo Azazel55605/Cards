@@ -37,6 +37,12 @@ use context_menu::ContextMenu;
 use card::{Card, CardIcon};
 use positioned::Positioned;
 
+// Application constants (not user-configurable)
+const SIDEBAR_WIDTH: f32 = 250.0;
+const DOT_SPACING: f32 = 30.0;
+const DOT_RADIUS: f32 = 2.0;
+const ANIMATION_DURATION_MS: f32 = 250.0;
+
 // Custom text editor style with visible cursor
 struct TransparentTextEditorStyle {
     theme: Theme,
@@ -218,8 +224,8 @@ impl Cards {
         let sidebar_offset = if sidebar_open { 0.0 } else { SIDEBAR_HIDDEN_OFFSET };
 
         let mut dot_grid = DotGrid::new(theme.dot_color(), theme.background());
-        dot_grid.set_dot_spacing(config.appearance.dot_spacing);
-        dot_grid.set_dot_radius(config.appearance.dot_radius);
+        dot_grid.set_dot_spacing(DOT_SPACING);
+        dot_grid.set_dot_radius(DOT_RADIUS);
         dot_grid.set_card_colors(
             theme.card_background(),
             theme.card_border(),
@@ -329,7 +335,7 @@ impl Cards {
                     self.dot_grid.clear_cards_cache();
                 }
 
-                let animation_duration = self.config.general.animation_duration_ms as f32;
+                let animation_duration = ANIMATION_DURATION_MS;
 
                 // Animate sidebar
                 self.animation_progress += 16.0 / animation_duration;
@@ -1220,7 +1226,7 @@ impl Cards {
 
         let sidebar: Element<Message> = Sidebar::new(
             sidebar_content,
-            self.config.appearance.sidebar_width,
+            SIDEBAR_WIDTH,
             sidebar_bg,
             sidebar_shadow,
             self.sidebar_offset,
@@ -1279,7 +1285,7 @@ impl Cards {
             return;
         }
 
-        let sidebar_width = self.config.appearance.sidebar_width;
+        let sidebar_width = SIDEBAR_WIDTH;
         let sidebar_x = 15.0 + self.sidebar_offset;
 
         if sidebar_x + sidebar_width < 0.0 {
@@ -1306,7 +1312,7 @@ impl Cards {
     }
 
     fn is_point_in_sidebar(&self, point: Point) -> bool {
-        let sidebar_width = self.config.appearance.sidebar_width;
+        let sidebar_width = SIDEBAR_WIDTH;
         let sidebar_x = 15.0 + self.sidebar_offset;
 
         // Check if sidebar is visible

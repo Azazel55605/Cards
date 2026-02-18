@@ -23,15 +23,6 @@ pub struct Config {
 pub struct AppearanceConfig {
     #[serde(default = "default_theme")]
     pub theme: ThemeConfig,
-
-    #[serde(default = "default_sidebar_width")]
-    pub sidebar_width: f32,
-
-    #[serde(default = "default_dot_spacing")]
-    pub dot_spacing: f32,
-
-    #[serde(default = "default_dot_radius")]
-    pub dot_radius: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,9 +32,6 @@ pub struct GeneralConfig {
 
     #[serde(default = "default_true")]
     pub enable_animations: bool,
-
-    #[serde(default = "default_animation_duration")]
-    pub animation_duration_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,12 +41,6 @@ pub struct WindowConfig {
 
     #[serde(default = "default_window_height")]
     pub height: f32,
-
-    #[serde(default = "default_min_window_width")]
-    pub min_width: f32,
-
-    #[serde(default = "default_min_window_height")]
-    pub min_height: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -74,24 +56,8 @@ fn default_theme() -> ThemeConfig {
     ThemeConfig::Light
 }
 
-fn default_sidebar_width() -> f32 {
-    250.0
-}
-
-fn default_dot_spacing() -> f32 {
-    30.0
-}
-
-fn default_dot_radius() -> f32 {
-    2.0
-}
-
 fn default_true() -> bool {
     true
-}
-
-fn default_animation_duration() -> u32 {
-    250
 }
 
 fn default_window_width() -> f32 {
@@ -102,21 +68,10 @@ fn default_window_height() -> f32 {
     600.0
 }
 
-fn default_min_window_width() -> f32 {
-    800.0
-}
-
-fn default_min_window_height() -> f32 {
-    600.0
-}
-
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
             theme: default_theme(),
-            sidebar_width: default_sidebar_width(),
-            dot_spacing: default_dot_spacing(),
-            dot_radius: default_dot_radius(),
         }
     }
 }
@@ -126,7 +81,6 @@ impl Default for GeneralConfig {
         Self {
             sidebar_open_on_start: default_true(),
             enable_animations: default_true(),
-            animation_duration_ms: default_animation_duration(),
         }
     }
 }
@@ -136,8 +90,6 @@ impl Default for WindowConfig {
         Self {
             width: default_window_width(),
             height: default_window_height(),
-            min_width: default_min_window_width(),
-            min_height: default_min_window_height(),
         }
     }
 }
@@ -164,6 +116,10 @@ impl Config {
     }
 
     /// Load configuration from file, creating default if it doesn't exist
+    /// SELF-HEALING: Automatically rewrites the config file to:
+    ///   - Add any missing fields with defaults
+    ///   - Remove obsolete fields not in current version
+    ///   - Ensure file matches current structure
     pub fn load() -> Self {
         let config_path = match Self::config_path() {
             Some(path) => path,
@@ -176,14 +132,49 @@ impl Config {
         if config_path.exists() {
             match fs::read_to_string(&config_path) {
                 Ok(contents) => {
-                    match toml::from_str(&contents) {
+                    match toml::from_str::<Config>(&contents) {
                         Ok(config) => {
                             println!("Loaded config from {:?}", config_path);
+
+                            // SELF-HEALING: Rewrite config if it differs from current structure
+                            // This automatically:
+                            // 1. Adds any missing fields that were filled by #[serde(default)]
+                            // 2. Removes obsolete fields (by serializing only current struct)
+                            // 3. Ensures file matches current code structure
+
+                            if let Ok(current_serialized) = toml::to_string_pretty(&config) {
+                                if current_serialized.trim() != contents.trim() {
+                                    println!("Healing config: adding missing fields and removing obsolete fields");
+
+                                    if let Err(e) = config.save() {
+                                        eprintln!("Failed to save healed config: {}", e);
+                                    } else {
+                                        println!("Config healed successfully");
+                                    }
+                                }
+                            }
+
                             return config;
                         }
                         Err(e) => {
                             eprintln!("Failed to parse config file: {}", e);
-                            eprintln!("Using default configuration");
+                            eprintln!("The config file may be corrupted.");
+                            eprintln!("Creating backup and using default configuration");
+
+                            // Try to backup the old config
+                            let backup_path = config_path.with_extension("toml.backup");
+                            if let Err(e) = fs::copy(&config_path, &backup_path) {
+                                eprintln!("Failed to backup old config: {}", e);
+                            } else {
+                                println!("Old config backed up to {:?}", backup_path);
+                            }
+
+                            // Create and save new default config
+                            let default_config = Self::default();
+                            if let Err(e) = default_config.save() {
+                                eprintln!("Failed to save default config: {}", e);
+                            }
+                            return default_config;
                         }
                     }
                 }
