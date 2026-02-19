@@ -71,6 +71,14 @@ impl CustomTextEditor {
         &self.text
     }
 
+    pub fn set_text(&mut self, text: String) {
+        self.text = text;
+        // Move cursor to end
+        self.cursor_position = self.text.len();
+        self.selection_start = None;
+        self.last_blink = Instant::now();
+    }
+
     pub fn insert_char(&mut self, c: char) {
         // Delete selection if any
         if let Some(sel_start) = self.selection_start {

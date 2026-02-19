@@ -246,6 +246,131 @@ impl DotGrid {
         self.cards.iter().any(|card| card.is_editing)
     }
 
+    /// Update checkbox positions for a card after rendering
+    pub fn update_card_checkbox_positions(&mut self, card_id: usize) {
+        if let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) {
+            if !card.is_editing {
+                let content_text = card.content.text();
+                if !content_text.is_empty() {
+                    // Calculate positions similar to draw_cards
+                    let top_bar_height = 30.0;
+                    let text_x = card.current_position.x + self.offset.x + 10.0;
+                    let text_y = card.current_position.y + self.offset.y + top_bar_height + 10.0;
+                    let max_width = card.width - 20.0;
+                    let max_height = card.height - top_bar_height - 20.0;
+
+                    let renderer = MarkdownRenderer::with_fonts_size_and_height(
+                        self.card_text,
+                        max_width,
+                        max_height,
+                        self.font,
+                        self.font_size
+                    );
+
+                    // Create a dummy frame to get checkbox positions
+                    // In practice, we need to extract this from actual rendering
+                    // For now, we'll compute it separately
+                    use crate::text_processor::TextProcessor;
+                    let processor = TextProcessor::with_font_size(self.font_size);
+                    let document = processor.process(&content_text);
+
+                    use crate::text_renderer::TextRenderer;
+                    let text_renderer = TextRenderer::with_fonts_and_height(
+                        self.card_text,
+                        max_width,
+                        max_height,
+                        self.font,
+                        self.font
+                    );
+
+                    // We need to compute checkbox positions without rendering
+                    // This is a simplified approach - store positions during actual render
+                    card.checkbox_positions.clear();
+                }
+            }
+        }
+    }
+
+    /// Check if a point clicks on a checkbox by computing positions on-the-fly
+    pub fn find_clicked_checkbox(&self, screen_pos: Point) -> Option<(usize, usize)> {
+        use crate::text_processor::TextProcessor;
+        use crate::text_renderer::TextRenderer;
+
+        for card in &self.cards {
+            if !card.is_editing {
+                let content_text = card.content.text();
+                if content_text.is_empty() {
+                    continue;
+                }
+
+                let top_bar_height = 30.0;
+                let card_screen_x = card.current_position.x + self.offset.x;
+                let card_screen_y = card.current_position.y + self.offset.y;
+
+                // Check if click is even within the card
+                let card_rect = Rectangle {
+                    x: card_screen_x,
+                    y: card_screen_y,
+                    width: card.width,
+                    height: card.height,
+                };
+
+                if !card_rect.contains(screen_pos) {
+                    continue;
+                }
+
+                // Compute checkbox positions for this card
+                let text_x = 10.0;
+                let text_y = top_bar_height + 10.0;
+                let max_width = card.width - 20.0;
+                let max_height = card.height - top_bar_height - 20.0;
+
+                let processor = TextProcessor::with_font_size(self.font_size);
+                let document = processor.process(&content_text);
+
+                let text_renderer = TextRenderer::with_fonts_and_height(
+                    self.card_text,
+                    max_width,
+                    max_height,
+                    self.font,
+                    self.font
+                );
+
+                // We need to extract checkbox positions without actually rendering
+                // Since rendering requires a Frame, let's check the document directly
+                let mut line_y = 0.0;
+                let mut checkbox_index = 0; // Match the checkbox_counter from parsing
+
+                for (_idx, line) in document.lines.iter().enumerate() {
+                    if let Some(checkbox) = &line.checkbox {
+                        let checkbox_size = 14.0;
+                        let checkbox_x = text_x - 20.0 + line.indent;
+                        let checkbox_y = line_y + text_y + line.spacing_before + 2.0;
+
+                        let checkbox_screen_rect = Rectangle {
+                            x: card_screen_x + checkbox_x,
+                            y: card_screen_y + checkbox_y,
+                            width: checkbox_size,
+                            height: checkbox_size,
+                        };
+
+                        if checkbox_screen_rect.contains(screen_pos) {
+                            // Return the checkbox_index, not the line_index from checkbox
+                            return Some((card.id, checkbox_index));
+                        }
+
+                        checkbox_index += 1;
+                    }
+
+                    // Approximate line height
+                    let line_height = 21.0 * (self.font_size / 14.0);
+                    line_y += line.spacing_before + line_height + line.spacing_after;
+                }
+            }
+        }
+        None
+    }
+
     pub fn view(&self) -> Element<'_, DotGridMessage> {
         Canvas::new(self)
             .width(Length::Fill)
@@ -387,7 +512,7 @@ impl DotGrid {
                     self.font, 
                     self.font_size
                 );
-                renderer.render(frame, &content_text, Point::new(text_x, text_y));
+                let (_height, _checkbox_positions) = renderer.render(frame, &content_text, Point::new(text_x, text_y));
             }
 
             // Draw editing indicator (use card's color for border when editing)
@@ -540,6 +665,7 @@ pub enum DotGridMessage {
     CardResizeStart(usize, Point),
     CardResize(usize, Point),
     CardResizeEnd(usize),
+    CheckboxToggle(usize, usize), // (card_id, line_index)
 }
 
 impl Program<DotGridMessage> for &DotGrid {
@@ -641,6 +767,14 @@ impl Program<DotGridMessage> for &DotGrid {
                                             return (
                                                 iced::widget::canvas::event::Status::Ignored,
                                                 None,
+                                            );
+                                        }
+
+                                        // Check if clicking on a checkbox
+                                        if let Some((card_id, line_index)) = self.find_clicked_checkbox(pos) {
+                                            return (
+                                                iced::widget::canvas::event::Status::Captured,
+                                                Some(DotGridMessage::CheckboxToggle(card_id, line_index)),
                                             );
                                         }
 

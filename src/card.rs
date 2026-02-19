@@ -1,5 +1,6 @@
 use iced::{Color, Point, Rectangle};
 use crate::custom_text_editor::CustomTextEditor;
+use crate::text_renderer::CheckboxPosition;
 
 #[derive(Debug)]
 pub struct Card {
@@ -15,6 +16,7 @@ pub struct Card {
     pub is_dragging: bool,
     pub content: CustomTextEditor,
     pub is_editing: bool,
+    pub checkbox_positions: Vec<CheckboxPosition>, // Track checkbox positions for interaction
 }
 
 impl Clone for Card {
@@ -32,6 +34,7 @@ impl Clone for Card {
             is_dragging: self.is_dragging,
             content: self.content.clone(),
             is_editing: self.is_editing,
+            checkbox_positions: self.checkbox_positions.clone(),
         }
     }
 }
@@ -525,6 +528,7 @@ impl Card {
             is_dragging: false,
             content: CustomTextEditor::new(),
             is_editing: false,
+            checkbox_positions: Vec::new(),
         }
     }
 

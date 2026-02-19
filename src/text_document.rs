@@ -7,6 +7,13 @@ pub struct TextSegment {
     pub style: TextStyle,
 }
 
+/// Represents a checkbox item
+#[derive(Debug, Clone)]
+pub struct CheckboxItem {
+    pub checked: bool,
+    pub line_index: usize, // Index in the document to identify which checkbox this is
+}
+
 /// Text styling options
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextStyle {
@@ -114,6 +121,7 @@ pub struct TextLine {
     pub indent: f32,
     pub spacing_before: f32,
     pub spacing_after: f32,
+    pub checkbox: Option<CheckboxItem>, // If this line has a checkbox
 }
 
 impl Default for TextLine {
@@ -123,6 +131,7 @@ impl Default for TextLine {
             indent: 0.0,
             spacing_before: 0.0,
             spacing_after: 0.0,
+            checkbox: None,
         }
     }
 }
@@ -149,6 +158,11 @@ impl TextLine {
 
     pub fn add_segment(&mut self, text: String, style: TextStyle) {
         self.segments.push(TextSegment { text, style });
+    }
+
+    pub fn with_checkbox(mut self, checked: bool, line_index: usize) -> Self {
+        self.checkbox = Some(CheckboxItem { checked, line_index });
+        self
     }
 
     pub fn is_empty(&self) -> bool {

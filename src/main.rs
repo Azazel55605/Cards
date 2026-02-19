@@ -557,6 +557,16 @@ impl Cards {
                         self.selected_card_id = None;
                         self.dot_grid.clear_cards_cache();
                     }
+                    DotGridMessage::CheckboxToggle(card_id, line_index) => {
+                        // Toggle checkbox in the card's markdown text
+                        if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                            let text = card.content.text();
+                            let updated_text = Self::toggle_checkbox_in_text(&text, line_index);
+                            card.content.set_text(updated_text);
+                            self.dot_grid.clear_cards_cache();
+                            self.save_state();
+                        }
+                    }
                 }
             }
             Message::EventOccurred(event) => {
@@ -987,6 +997,60 @@ impl Cards {
             }
         }
         Task::none()
+    }
+
+    /// Toggle a checkbox at the specified line index in markdown text
+    fn toggle_checkbox_in_text(text: &str, line_index: usize) -> String {
+        let mut current_line_in_list = 0;
+        let mut result = String::new();
+        let mut in_md_block = false;
+        
+        for line in text.lines() {
+            // Track if we're inside <md> tags
+            if line.trim().starts_with("<md>") {
+                in_md_block = true;
+            }
+            
+            // Only process checkboxes in markdown blocks
+            if in_md_block {
+                // Check if this is a checkbox line
+                if line.trim_start().starts_with("- [ ]") || line.trim_start().starts_with("- [x]") || line.trim_start().starts_with("- [X]") {
+                    if current_line_in_list == line_index {
+                        // Toggle this checkbox
+                        if line.contains("- [ ]") {
+                            result.push_str(&line.replace("- [ ]", "- [x]"));
+                        } else {
+                            result.push_str(&line.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]"));
+                        }
+                    } else {
+                        result.push_str(line);
+                    }
+                    current_line_in_list += 1;
+                } else {
+                    result.push_str(line);
+                }
+            } else {
+                result.push_str(line);
+            }
+            
+            result.push('\n');
+            
+            if line.trim().starts_with("</md>") {
+                in_md_block = false;
+            }
+        }
+        
+        // Remove trailing newline if original didn't have one
+        if !text.ends_with('\n') && result.ends_with('\n') {
+            result.pop();
+        }
+        
+        result
+    }
+
+    /// Save application state (placeholder for future persistence)
+    fn save_state(&self) {
+        // TODO: Implement state persistence if needed
     }
 
     fn subscription(&self) -> Subscription<Message> {

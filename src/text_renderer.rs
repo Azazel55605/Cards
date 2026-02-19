@@ -1,6 +1,14 @@
-use iced::widget::canvas::{Frame, Text, Path, Stroke};
-use iced::{Color, Point, alignment};
+use iced::widget::canvas::{Frame, Text, Path, Stroke, Fill};
+use iced::{Color, Point, alignment, Rectangle};
 use crate::text_document::{TextDocument, TextLine, TextSegment, TextStyle};
+
+/// Position of a rendered checkbox for hit detection
+#[derive(Debug, Clone)]
+pub struct CheckboxPosition {
+    pub rect: Rectangle,
+    pub line_index: usize,
+    pub checked: bool,
+}
 
 /// General text renderer - renders styled text documents
 pub struct TextRenderer {
@@ -49,9 +57,10 @@ impl TextRenderer {
     }
 
     /// Render a text document
-    pub fn render(&self, frame: &mut Frame, document: &TextDocument, position: Point) -> f32 {
+    pub fn render(&self, frame: &mut Frame, document: &TextDocument, position: Point) -> (f32, Vec<CheckboxPosition>) {
         let mut current_y = position.y;
         let start_y = position.y;
+        let mut checkbox_positions = Vec::new();
 
         for line in &document.lines {
             // Check if we've exceeded max_height
@@ -80,13 +89,19 @@ impl TextRenderer {
 
             // Render the line
             let line_height = self.calculate_line_height(line);
-            current_y = self.render_line(frame, line, position.x + line.indent, current_y, line_height, start_y);
+            let (new_y, checkbox_pos) = self.render_line(frame, line, position.x + line.indent, current_y, line_height, start_y);
+            current_y = new_y;
+
+            // Collect checkbox position if present
+            if let Some(pos) = checkbox_pos {
+                checkbox_positions.push(pos);
+            }
 
             // Add spacing after line
             current_y += line.spacing_after;
         }
 
-        current_y - position.y
+        (current_y - position.y, checkbox_positions)
     }
 
     fn calculate_line_height(&self, line: &TextLine) -> f32 {
@@ -98,10 +113,116 @@ impl TextRenderer {
         21.0 * (max_size / 14.0)
     }
 
-    fn render_line(&self, frame: &mut Frame, line: &TextLine, x: f32, y: f32, line_height: f32, start_y: f32) -> f32 {
+    fn render_line(&self, frame: &mut Frame, line: &TextLine, x: f32, y: f32, line_height: f32, start_y: f32) -> (f32, Option<CheckboxPosition>) {
         let mut current_x = x;
         let mut current_y = y;
         let mut line_segments: Vec<(String, TextStyle, f32)> = Vec::new();
+        let mut checkbox_pos: Option<CheckboxPosition> = None;
+
+        // Render checkbox if present
+        if let Some(checkbox) = &line.checkbox {
+            let checkbox_size = 14.0;
+            // Position checkbox 20px to the left of where text will be
+            // Note: x already includes line.indent from the caller
+            let checkbox_x = x - 20.0;
+            let checkbox_y = y + 2.0;
+            let corner_radius = 3.0; // Rounded corners for checkbox
+
+            // Draw checkbox background
+            let checkbox_rect = Rectangle {
+                x: checkbox_x,
+                y: checkbox_y,
+                width: checkbox_size,
+                height: checkbox_size,
+            };
+
+            // Draw checkbox border with rounded corners
+            let border_path = Path::new(|builder| {
+                use iced::widget::canvas::path::Builder;
+                let x = checkbox_x;
+                let y = checkbox_y;
+                let w = checkbox_size;
+                let h = checkbox_size;
+                let r = corner_radius;
+
+                // Start at top-left, after corner
+                builder.move_to(Point::new(x + r, y));
+
+                // Top edge
+                builder.line_to(Point::new(x + w - r, y));
+
+                // Top-right corner
+                builder.arc_to(
+                    Point::new(x + w, y),
+                    Point::new(x + w, y + r),
+                    r
+                );
+
+                // Right edge
+                builder.line_to(Point::new(x + w, y + h - r));
+
+                // Bottom-right corner
+                builder.arc_to(
+                    Point::new(x + w, y + h),
+                    Point::new(x + w - r, y + h),
+                    r
+                );
+
+                // Bottom edge
+                builder.line_to(Point::new(x + r, y + h));
+
+                // Bottom-left corner
+                builder.arc_to(
+                    Point::new(x, y + h),
+                    Point::new(x, y + h - r),
+                    r
+                );
+
+                // Left edge
+                builder.line_to(Point::new(x, y + r));
+
+                // Top-left corner
+                builder.arc_to(
+                    Point::new(x, y),
+                    Point::new(x + r, y),
+                    r
+                );
+
+                builder.close();
+            });
+
+            frame.stroke(
+                &border_path,
+                Stroke::default()
+                    .with_color(self.text_color)
+                    .with_width(1.5)
+            );
+
+            // Draw checkmark if checked
+            if checkbox.checked {
+                // Draw an X or checkmark
+                let check_offset = 3.0;
+                let check_path = Path::new(|builder| {
+                    // Draw a checkmark
+                    builder.move_to(Point::new(checkbox_x + check_offset, checkbox_y + checkbox_size / 2.0));
+                    builder.line_to(Point::new(checkbox_x + checkbox_size / 2.5, checkbox_y + checkbox_size - check_offset));
+                    builder.line_to(Point::new(checkbox_x + checkbox_size - check_offset, checkbox_y + check_offset));
+                });
+                frame.stroke(
+                    &check_path,
+                    Stroke::default()
+                        .with_color(self.text_color)
+                        .with_width(2.0)
+                );
+            }
+
+            // Store checkbox position for hit detection
+            checkbox_pos = Some(CheckboxPosition {
+                rect: checkbox_rect,
+                line_index: checkbox.line_index,
+                checked: checkbox.checked,
+            });
+        }
 
         // Build segments for this visual line, wrapping as needed
         for segment in &line.segments {
@@ -117,7 +238,7 @@ impl TextRenderer {
                 // Check if we would exceed max_height before rendering more
                 if let Some(max_h) = self.max_height {
                     if current_y + line_height - start_y > max_h {
-                        return current_y;
+                        return (current_y, checkbox_pos);
                     }
                 }
 
@@ -146,7 +267,7 @@ impl TextRenderer {
                             // Check height again after wrapping
                             if let Some(max_h) = self.max_height {
                                 if current_y + line_height - start_y > max_h {
-                                    return current_y;
+                                    return (current_y, checkbox_pos);
                                 }
                             }
 
@@ -171,7 +292,7 @@ impl TextRenderer {
                     // Check height again after wrapping
                     if let Some(max_h) = self.max_height {
                         if current_y + line_height - start_y > max_h {
-                            return current_y;
+                            return (current_y, checkbox_pos);
                         }
                     }
 
@@ -195,7 +316,7 @@ impl TextRenderer {
             // Final check before rendering last line
             if let Some(max_h) = self.max_height {
                 if current_y + line_height - start_y > max_h {
-                    return current_y;
+                    return (current_y, checkbox_pos);
                 }
             }
 
@@ -203,7 +324,7 @@ impl TextRenderer {
             current_y += line_height;
         }
 
-        current_y
+        (current_y, checkbox_pos)
     }
 
     fn render_segments(&self, frame: &mut Frame, segments: &[(String, TextStyle, f32)], y: f32) {

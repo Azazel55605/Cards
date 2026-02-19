@@ -54,6 +54,7 @@ impl MarkdownParser {
         let mut in_code_block = false;
         let mut code_block_lang: Option<String> = None;
         let mut code_block_content = String::new();
+        let mut checkbox_counter = 0; // Track checkbox index for proper identification
 
         for event in parser {
             match event {
@@ -97,8 +98,11 @@ impl MarkdownParser {
                         }
                         Tag::Item => {
                             self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
-                            current_line = TextLine::new().with_indent(10.0);
-                            text_buffer.push_str("• ");
+
+                            // Create new line with indent - checkbox will be added by TaskListMarker event if present
+                            // Use larger indent to add spacing from left edge
+                            current_line = TextLine::new().with_indent(30.0);
+                            // Don't add bullet yet - wait to see if TaskListMarker comes
                         }
                         Tag::CodeBlock(kind) => {
                             self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
@@ -171,11 +175,21 @@ impl MarkdownParser {
                         _ => {}
                     }
                 }
+                Event::TaskListMarker(checked) => {
+                    // TaskListMarker comes AFTER Tag::Item starts
+                    // Add checkbox to the current line
+                    current_line = current_line.with_checkbox(checked, checkbox_counter);
+                    checkbox_counter += 1;
+                }
                 Event::Text(text) => {
                     if in_code_block {
                         // Collect code block content for later highlighting
                         code_block_content.push_str(&text);
                     } else {
+                        // If we're in a list item and haven't added a bullet or checkbox, add bullet now
+                        if in_list && current_line.checkbox.is_none() && !text_buffer.contains("• ") && current_line.segments.is_empty() {
+                            text_buffer.push_str("• ");
+                        }
                         text_buffer.push_str(&text);
                     }
                 }
@@ -190,9 +204,6 @@ impl MarkdownParser {
                 Event::HardBreak => {
                     self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
                     current_line = TextLine::new();
-                }
-                Event::TaskListMarker(checked) => {
-                    text_buffer.insert_str(0, if checked { "[x] " } else { "[ ] " });
                 }
                 Event::Rule => {
                     self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
