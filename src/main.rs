@@ -1791,9 +1791,9 @@ impl Cards {
 
         // Vertical separator
         let separator_color = self.theme.separator_color();
-        let separator = container(Space::new(Length::Fixed(1.0), Length::Fixed(32.0)))
+        let separator = container(Space::new(Length::Fixed(1.0), Length::Fixed(24.0)))
             .width(1)
-            .height(32)
+            .height(24)
             .style(move |_theme: &IcedTheme| {
                 container::Style {
                     background: Some(iced::Background::Color(separator_color)),
@@ -1853,6 +1853,7 @@ impl Cards {
             ]
             .spacing(2)
             .padding(6)
+            .align_y(Alignment::Center)
         )
         .style(move |_theme: &IcedTheme| {
             container::Style {
