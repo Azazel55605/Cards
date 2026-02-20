@@ -17,7 +17,7 @@ mod text_renderer;
 mod markdown_parser;
 mod text_processor;
 
-use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list};
+use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
 use iced::{Border, Color, Shadow};
 use iced::time;
@@ -25,6 +25,7 @@ use iced::event::{self, Event};
 use iced::mouse;
 use iced::{Padding, Alignment};
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
 use theme::Theme;
 use button_style::CardButtonStyle;
 use dot_grid::{DotGrid, DotGridMessage};
@@ -127,6 +128,14 @@ const APP_NAME: &str = "Cards";
 const APP_VERSION: &str = "0.1.0";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+enum BoardAnimationType {
+    None,
+    AddBoard,
+    DeleteBoard,
+    ButtonPositionChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct FontSize(f32);
 
 impl FontSize {
@@ -194,6 +203,17 @@ pub enum Message {
     FormatBullet,
     DuplicateCard(usize),
     DeleteCard(usize),
+    // Board messages
+    AddNewBoard,
+    SelectBoard(usize),
+    DeleteBoard(usize),
+    BoardHover(Option<usize>),
+    StartRenamingBoard(usize),
+    BoardRenameInput(String),
+    FinishRenamingBoard,
+    CancelRenamingBoard,
+    // Settings messages
+    SetNewBoardButtonAtTop(bool),
 }
 
 struct Cards {
@@ -222,6 +242,18 @@ struct Cards {
     editing_card_id: Option<usize>,
     selected_card_id: Option<usize>,  // Track selected card for toolbar
     clipboard_text: String,  // Store clipboard content
+    // Board management
+    boards: Vec<String>,  // List of board names
+    active_board_index: usize,  // Currently active board
+    hovered_board_index: Option<usize>,  // Track which board is being hovered
+    editing_board_index: Option<usize>,  // Track which board is being renamed
+    board_rename_value: String,  // Current value during rename
+    board_cards: HashMap<usize, Vec<card::Card>>,  // Store cards for each board
+    // Board animations
+    board_list_animating: bool,  // Animation for add/delete/reorder
+    board_list_animation_progress: f32,
+    board_list_animation_type: BoardAnimationType,
+    animating_board_index: Option<usize>,  // Track which board is being animated
     // Configuration
     config: Config,
     // Cache SVG handles
@@ -239,6 +271,7 @@ struct Cards {
 }
 
 const SIDEBAR_HIDDEN_OFFSET: f32 = -280.0;
+const BOARD_ANIMATION_DURATION_MS: f32 = 150.0; // Faster animation for board changes
 
 impl Cards {
     fn new(config: Config) -> (Self, Task<Message>) {
@@ -281,6 +314,20 @@ impl Cards {
             editing_card_id: None,
             selected_card_id: None,
             clipboard_text: String::new(),
+            boards: vec!["Board 1".to_string()],
+            active_board_index: 0,
+            hovered_board_index: None,
+            editing_board_index: None,
+            board_rename_value: String::new(),
+            board_cards: {
+                let mut map = HashMap::new();
+                map.insert(0, Vec::new());  // Initialize first board with empty cards
+                map
+            },
+            board_list_animating: false,
+            board_list_animation_progress: 0.0,
+            board_list_animation_type: BoardAnimationType::None,
+            animating_board_index: None,
             config,
             icon_menu_left: svg::Handle::from_memory(include_bytes!("icons/menu-left.svg")),
             icon_menu_right: svg::Handle::from_memory(include_bytes!("icons/menu-right.svg")),
@@ -420,6 +467,71 @@ impl Cards {
 
                     self.dot_grid.set_offset(self.canvas_offset);
                 }
+
+                // Animate board list changes (faster animation)
+                if self.board_list_animating {
+                    self.board_list_animation_progress += 16.0 / BOARD_ANIMATION_DURATION_MS;
+
+                    if self.board_list_animation_progress >= 1.0 {
+                        println!("DEBUG: Animation complete");
+                        self.board_list_animation_progress = 1.0;
+                        self.board_list_animating = false;
+
+                        // Handle post-animation actions
+                        match self.board_list_animation_type {
+                            BoardAnimationType::DeleteBoard => {
+                                // Actually delete the board after animation
+                                if let Some(index) = self.animating_board_index {
+                                    if index < self.boards.len() {
+                                        self.boards.remove(index);
+
+                                        // Remove the deleted board's cards and reindex
+                                        let mut new_board_cards = HashMap::new();
+                                        for (board_idx, cards) in self.board_cards.iter() {
+                                            if *board_idx < index {
+                                                // Boards before the deleted one keep their index
+                                                new_board_cards.insert(*board_idx, cards.clone());
+                                            } else if *board_idx > index {
+                                                // Boards after the deleted one shift down by 1
+                                                new_board_cards.insert(*board_idx - 1, cards.clone());
+                                            }
+                                            // Skip board at 'index' - it's being deleted
+                                        }
+                                        self.board_cards = new_board_cards;
+
+                                        // Adjust active board index if needed
+                                        if self.active_board_index >= self.boards.len() {
+                                            self.active_board_index = self.boards.len().saturating_sub(1);
+                                            // Load cards for the new active board
+                                            let new_cards = self.board_cards.get(&self.active_board_index).cloned().unwrap_or_default();
+                                            self.dot_grid.load_cards(new_cards);
+                                        } else if self.active_board_index > index {
+                                            self.active_board_index = self.active_board_index.saturating_sub(1);
+                                            // Active board shifted, reload its cards
+                                            let new_cards = self.board_cards.get(&self.active_board_index).cloned().unwrap_or_default();
+                                            self.dot_grid.load_cards(new_cards);
+                                        } else if self.active_board_index == index {
+                                            // Deleted the active board, switch to new active board
+                                            let new_cards = self.board_cards.get(&self.active_board_index).cloned().unwrap_or_default();
+                                            self.dot_grid.load_cards(new_cards);
+                                        }
+
+                                        self.dot_grid.clear_cards_cache();
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+
+                        self.board_list_animation_type = BoardAnimationType::None;
+                        self.animating_board_index = None;
+                    } else {
+                        println!("DEBUG: Animation progress: {:.2}", self.board_list_animation_progress);
+                    }
+                }
+
+                // Save current board's cards to keep them synced
+                self.save_current_board_cards();
 
                 self.update_exclude_region();
             }
@@ -575,6 +687,19 @@ impl Cards {
                         self.window_size = size;
                         self.update_exclude_region();
                     }
+                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                        // If we're editing a board name and user clicks outside (not captured by widget),
+                        // finish the rename
+                        if self.editing_board_index.is_some() {
+                            if let Some(index) = self.editing_board_index {
+                                if index < self.boards.len() && !self.board_rename_value.trim().is_empty() {
+                                    self.boards[index] = self.board_rename_value.trim().to_string();
+                                }
+                            }
+                            self.editing_board_index = None;
+                            self.board_rename_value.clear();
+                        }
+                    }
                     Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                         if !self.settings_open {
                             let scroll_delta = match delta {
@@ -652,6 +777,59 @@ impl Cards {
             Message::KeyboardInput(keyboard_event) => {
                 // Check for global shortcuts first
                 if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = &keyboard_event {
+                    // Ctrl+Tab to cycle forward through boards
+                    if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab)) {
+                        if self.boards.len() > 1 {
+                            let next_index = (self.active_board_index + 1) % self.boards.len();
+                            // Save current board's cards
+                            self.save_current_board_cards();
+
+                            // Clear editing/selection state
+                            self.editing_card_id = None;
+                            self.selected_card_id = None;
+                            self.card_icon_menu_position = None;
+                            self.card_icon_menu_card_id = None;
+
+                            // Switch to next board
+                            self.active_board_index = next_index;
+
+                            // Load new board's cards
+                            let new_cards = self.board_cards.get(&next_index).cloned().unwrap_or_default();
+                            self.dot_grid.load_cards(new_cards);
+                            self.dot_grid.clear_cards_cache();
+                        }
+                        return Task::none();
+                    }
+
+                    // Ctrl+Shift+Tab to cycle backward through boards
+                    if modifiers.control() && modifiers.shift() && matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab)) {
+                        if self.boards.len() > 1 {
+                            let prev_index = if self.active_board_index == 0 {
+                                self.boards.len() - 1
+                            } else {
+                                self.active_board_index - 1
+                            };
+
+                            // Save current board's cards
+                            self.save_current_board_cards();
+
+                            // Clear editing/selection state
+                            self.editing_card_id = None;
+                            self.selected_card_id = None;
+                            self.card_icon_menu_position = None;
+                            self.card_icon_menu_card_id = None;
+
+                            // Switch to previous board
+                            self.active_board_index = prev_index;
+
+                            // Load new board's cards
+                            let new_cards = self.board_cards.get(&prev_index).cloned().unwrap_or_default();
+                            self.dot_grid.load_cards(new_cards);
+                            self.dot_grid.clear_cards_cache();
+                        }
+                        return Task::none();
+                    }
+
                     // Ctrl+0 to recenter canvas (global, works even when not editing)
                     if modifiers.control() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "0") {
                         if self.config.general.enable_animations {
@@ -669,7 +847,12 @@ impl Cards {
 
                     if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
                         // Close menus/settings/editing - but never quit the app
-                        if self.card_icon_menu_position.is_some() {
+                        if self.editing_board_index.is_some() {
+                            // Cancel board rename
+                            self.editing_board_index = None;
+                            self.board_rename_value.clear();
+                            return Task::none();
+                        } else if self.card_icon_menu_position.is_some() {
                             self.card_icon_menu_position = None;
                             self.card_icon_menu_card_id = None;
                             return Task::none();
@@ -995,8 +1178,125 @@ impl Cards {
                     self.editing_card_id = None;
                 }
             }
+            Message::AddNewBoard => {
+                // Add a new board with a default name
+                let board_number = self.boards.len() + 1;
+                let board_name = format!("Board {}", board_number);
+                let new_board_index = self.boards.len();
+                self.boards.push(board_name);
+
+                // Initialize empty cards vec for new board
+                self.board_cards.insert(new_board_index, Vec::new());
+
+                // Trigger add animation if animations enabled
+                if self.config.general.enable_animations {
+                    println!("DEBUG: Starting AddBoard animation for board {}", self.boards.len() - 1);
+                    self.board_list_animating = true;
+                    self.board_list_animation_progress = 0.0;
+                    self.board_list_animation_type = BoardAnimationType::AddBoard;
+                    self.animating_board_index = Some(self.boards.len() - 1);
+                }
+            }
+            Message::SelectBoard(index) => {
+                if index < self.boards.len() {
+                    // If clicking the already active board, start renaming (double-click behavior)
+                    if index == self.active_board_index && self.editing_board_index.is_none() {
+                        self.editing_board_index = Some(index);
+                        self.board_rename_value = self.boards[index].clone();
+                    } else if index != self.active_board_index {
+                        // Switching to a different board
+                        // Save current board's cards
+                        let current_cards = self.dot_grid.cards().iter().cloned().collect();
+                        self.board_cards.insert(self.active_board_index, current_cards);
+
+                        // Clear any editing/selection state
+                        self.editing_card_id = None;
+                        self.selected_card_id = None;
+                        self.card_icon_menu_position = None;
+                        self.card_icon_menu_card_id = None;
+
+                        // Switch to new board
+                        self.active_board_index = index;
+
+                        // Load new board's cards (or create empty vec if board doesn't exist in map)
+                        let new_board_cards = self.board_cards.get(&index).cloned().unwrap_or_default();
+                        self.dot_grid.load_cards(new_board_cards);
+
+                        // Clear the cards cache to force re-render
+                        self.dot_grid.clear_cards_cache();
+                    }
+                }
+            }
+            Message::DeleteBoard(index) => {
+                // Don't allow deleting the last board
+                if self.boards.len() > 1 && index < self.boards.len() {
+                    // Trigger delete animation if animations enabled
+                    if self.config.general.enable_animations {
+                        println!("DEBUG: Starting DeleteBoard animation for board {}", index);
+                        self.board_list_animating = true;
+                        self.board_list_animation_progress = 0.0;
+                        self.board_list_animation_type = BoardAnimationType::DeleteBoard;
+                        self.animating_board_index = Some(index);
+                    } else {
+                        // No animation, delete immediately
+                        self.boards.remove(index);
+
+                        // Adjust active board index if needed
+                        if self.active_board_index >= self.boards.len() {
+                            self.active_board_index = self.boards.len().saturating_sub(1);
+                        } else if self.active_board_index > index {
+                            self.active_board_index = self.active_board_index.saturating_sub(1);
+                        }
+                    }
+                }
+            }
+            Message::BoardHover(index) => {
+                self.hovered_board_index = index;
+            }
+            Message::StartRenamingBoard(index) => {
+                if index < self.boards.len() {
+                    self.editing_board_index = Some(index);
+                    self.board_rename_value = self.boards[index].clone();
+                }
+            }
+            Message::BoardRenameInput(value) => {
+                self.board_rename_value = value;
+            }
+            Message::FinishRenamingBoard => {
+                if let Some(index) = self.editing_board_index {
+                    if index < self.boards.len() && !self.board_rename_value.trim().is_empty() {
+                        self.boards[index] = self.board_rename_value.trim().to_string();
+                    }
+                }
+                self.editing_board_index = None;
+                self.board_rename_value.clear();
+            }
+            Message::CancelRenamingBoard => {
+                self.editing_board_index = None;
+                self.board_rename_value.clear();
+            }
+            Message::SetNewBoardButtonAtTop(at_top) => {
+                // Trigger button position change animation if animations enabled
+                if self.config.general.enable_animations {
+                    println!("DEBUG: Starting ButtonPositionChange animation");
+                    self.board_list_animating = true;
+                    self.board_list_animation_progress = 0.0;
+                    self.board_list_animation_type = BoardAnimationType::ButtonPositionChange;
+                    self.animating_board_index = None; // Affects whole list
+                }
+
+                if let Err(e) = self.config.set_new_board_button_at_top(at_top) {
+                    eprintln!("Failed to save new board button position setting: {}", e);
+                }
+            }
         }
         Task::none()
+    }
+
+    /// Save current board's cards to the board_cards HashMap
+    fn save_current_board_cards(&mut self) {
+        let current_cards = self.dot_grid.cards().iter().cloned().collect();
+        self.board_cards.insert(self.active_board_index, current_cards);
     }
 
     /// Toggle a checkbox at the specified line index in markdown text
@@ -1064,6 +1364,10 @@ impl Cards {
             }
 
             match event {
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                    // Will be handled in EventOccurred to finish board rename if clicking outside
+                    Some(Message::EventOccurred(event))
+                }
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::CloseRequested) => {
@@ -1286,6 +1590,390 @@ impl Cards {
         .class(btn_style)
         .on_press(Message::ToggleSidebar);
 
+        // Build boards section with animations
+        let mut board_buttons = column![].spacing(5);
+
+        // Calculate animation values
+        let animation_active = self.board_list_animating;
+        let progress = self.board_list_animation_progress;
+        let animation_type = self.board_list_animation_type;
+
+        // Get the board index being animated (if any)
+        let animated_board_index = self.animating_board_index;
+
+        // Don't render button in list during position change animation
+        let skip_button_in_list = animation_active && animation_type == BoardAnimationType::ButtonPositionChange;
+
+        // Add "Add New Board" button at top if configured (and not animating position change)
+        if self.config.general.new_board_button_at_top && !skip_button_in_list {
+            let add_board_btn_style = CardButtonStyle {
+                background: Color::TRANSPARENT,
+                background_hovered: self.theme.button_background_hovered(),
+                text_color: self.theme.button_text(),
+                border_color: Color::TRANSPARENT,
+                shadow_color: Color::TRANSPARENT,
+            };
+
+            let add_board_button = button(
+                container(
+                    text("+ Add New Board").size(14)
+                )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Start)
+                    .align_y(Alignment::Center)
+                    .padding(Padding {
+                        top: 0.0,
+                        right: 10.0,
+                        bottom: 0.0,
+                        left: 10.0,
+                    })
+            )
+            .height(36)
+            .width(Length::Fill)
+            .class(add_board_btn_style)
+            .on_press(Message::AddNewBoard);
+
+            board_buttons = board_buttons.push(add_board_button);
+        }
+
+        for (index, board_name) in self.boards.iter().enumerate() {
+            let is_active = index == self.active_board_index;
+            let is_hovered = self.hovered_board_index == Some(index);
+            let is_being_animated = animated_board_index == Some(index);
+            let is_editing = self.editing_board_index == Some(index);
+
+            let board_btn_style = if is_active {
+                CardButtonStyle {
+                    background: self.theme.button_background_hovered(),
+                    background_hovered: self.theme.button_background_hovered(),
+                    text_color: self.theme.button_text(),
+                    border_color: Color::TRANSPARENT,
+                    shadow_color: Color::TRANSPARENT,
+                }
+            } else {
+                CardButtonStyle {
+                    background: Color::TRANSPARENT,
+                    background_hovered: self.theme.button_background_hovered(),
+                    text_color: self.theme.button_text(),
+                    border_color: Color::TRANSPARENT,
+                    shadow_color: Color::TRANSPARENT,
+                }
+            };
+
+            let delete_btn_style = CardButtonStyle {
+                background: Color::TRANSPARENT,
+                background_hovered: self.theme.button_background_hovered(),
+                text_color: self.theme.button_text(),
+                border_color: Color::TRANSPARENT,
+                shadow_color: Color::TRANSPARENT,
+            };
+
+            // Board content - either text input for editing or button
+            let board_content: Element<Message> = if is_editing {
+                // Show text input when editing - styled to match the rest of the app
+                let text_input_widget = text_input("", &self.board_rename_value)
+                    .on_input(Message::BoardRenameInput)
+                    .on_submit(Message::FinishRenamingBoard)
+                    .padding(Padding {
+                        top: 0.0,
+                        right: 10.0,
+                        bottom: 0.0,
+                        left: 10.0,
+                    })
+                    .size(14.0)
+                    .style(|theme: &IcedTheme, _status| {
+                        // Custom styling to match board button appearance
+                        use iced::widget::text_input::Style;
+
+                        Style {
+                            background: iced::Background::Color(Color::TRANSPARENT),
+                            border: Border {
+                                color: Color::TRANSPARENT,
+                                width: 0.0,
+                                radius: 4.0.into(),
+                            },
+                            icon: Color::TRANSPARENT,
+                            placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
+                            value: if theme == &IcedTheme::Dark {
+                                Color::WHITE
+                            } else {
+                                Color::BLACK
+                            },
+                            selection: if theme == &IcedTheme::Dark {
+                                Color::from_rgba(0.3, 0.5, 0.7, 0.5)
+                            } else {
+                                Color::from_rgba(0.4, 0.6, 0.8, 0.5)
+                            },
+                        }
+                    });
+
+                container(text_input_widget)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(36.0))
+                    .padding(Padding {
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 0.0,
+                        left: 0.0,
+                    })
+                    .align_y(Alignment::Center)
+                    .style(move |theme: &IcedTheme| {
+                        container::Style {
+                            background: Some(iced::Background::Color(
+                                if theme == &IcedTheme::Dark {
+                                    Color::from_rgba(0.2, 0.2, 0.2, 1.0)
+                                } else {
+                                    Color::from_rgba(0.9, 0.9, 0.9, 1.0)
+                                }
+                            )),
+                            border: Border {
+                                color: if theme == &IcedTheme::Dark {
+                                    Color::from_rgba(0.4, 0.4, 0.4, 1.0)
+                                } else {
+                                    Color::from_rgba(0.7, 0.7, 0.7, 1.0)
+                                },
+                                width: 1.0,
+                                radius: 4.0.into(),
+                            },
+                            shadow: Shadow::default(),
+                            text_color: None,
+                        }
+                    })
+                    .into()
+            } else if self.boards.len() > 1 && is_hovered {
+                // When hovered, show delete button
+                row![
+                    button(
+                        container(
+                            text(board_name.clone()).size(14)
+                        )
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .align_x(Alignment::Start)
+                            .align_y(Alignment::Center)
+                            .padding(Padding {
+                                top: 0.0,
+                                right: 5.0,
+                                bottom: 0.0,
+                                left: 10.0,
+                            })
+                    )
+                    .height(36)
+                    .width(Length::Fill)
+                    .class(board_btn_style)
+                    .on_press(Message::SelectBoard(index)),
+                    button(
+                        container(
+                            svg(self.icon_delete.clone())
+                                .width(28)
+                                .height(28)
+                                .class(SvgStyle { color: Color::from_rgb(0.8, 0.2, 0.2) })
+                        )
+                            .width(36)
+                            .height(36)
+                            .align_x(Alignment::Center)
+                            .align_y(Alignment::Center)
+                    )
+                    .height(36)
+                    .width(36)
+                    .class(delete_btn_style)
+                    .on_press(Message::DeleteBoard(index))
+                ]
+                .spacing(0)
+                .into()
+            } else {
+                // When not hovered or only one board, full width button
+                button(
+                    container(
+                        text(board_name.clone()).size(14)
+                    )
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .align_x(Alignment::Start)
+                        .align_y(Alignment::Center)
+                        .padding(Padding {
+                            top: 0.0,
+                            right: 10.0,
+                            bottom: 0.0,
+                            left: 10.0,
+                        })
+                )
+                .height(36)
+                .width(Length::Fill)
+                .class(board_btn_style)
+                .on_press(Message::SelectBoard(index))
+                .into()
+            };
+
+            // Wrap in mouse_area to detect hover
+            let board_with_hover = mouse_area(board_content)
+                .on_enter(Message::BoardHover(Some(index)))
+                .on_exit(Message::BoardHover(None));
+
+            // Apply animation based on type
+            let final_board = if is_being_animated && animation_active {
+                match animation_type {
+                    BoardAnimationType::AddBoard => {
+                        // Slide in from 0 to 36
+                        let height = 36.0 * progress;
+                        container(board_with_hover)
+                            .height(Length::Fixed(height))
+                    }
+                    BoardAnimationType::DeleteBoard => {
+                        // Slide out from 36 to 0 (reverse of add)
+                        let height = 36.0 * (1.0 - progress);
+                        container(board_with_hover)
+                            .height(Length::Fixed(height))
+                    }
+                    _ => container(board_with_hover)
+                }
+            } else {
+                container(board_with_hover)
+            };
+
+            board_buttons = board_buttons.push(final_board);
+        }
+
+        // Add "Add New Board" button at bottom if not at top (and not during animation)
+        if !self.config.general.new_board_button_at_top && !skip_button_in_list {
+            let add_board_btn_style = CardButtonStyle {
+                background: Color::TRANSPARENT,
+                background_hovered: self.theme.button_background_hovered(),
+                text_color: self.theme.button_text(),
+                border_color: Color::TRANSPARENT,
+                shadow_color: Color::TRANSPARENT,
+            };
+
+            let add_board_button = button(
+                container(
+                    text("+ Add New Board").size(14)
+                )
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Start)
+                    .align_y(Alignment::Center)
+                    .padding(Padding {
+                        top: 0.0,
+                        right: 10.0,
+                        bottom: 0.0,
+                        left: 10.0,
+                    })
+            )
+            .height(36)
+            .width(Length::Fill)
+            .class(add_board_btn_style)
+            .on_press(Message::AddNewBoard);
+
+            board_buttons = board_buttons.push(add_board_button);
+        }
+
+        // Create a scrollable container for the boards
+        // Calculate offset for entire board list during button position animation
+        let board_list_offset = if animation_active && animation_type == BoardAnimationType::ButtonPositionChange {
+            let button_height = 36.0 + 5.0; // height + spacing
+            if self.config.general.new_board_button_at_top {
+                // Button moving UP to top: boards move DOWN as a group
+                button_height * progress
+            } else {
+                // Button moving DOWN to bottom: boards move UP (back) as a group
+                button_height * (1.0 - progress)
+            }
+        } else {
+            0.0
+        };
+
+        let boards_container = container(board_buttons)
+            .width(Length::Fill)
+            .padding(Padding {
+                top: 5.0 + board_list_offset,
+                right: 10.0,
+                bottom: 5.0,
+                left: 10.0,
+            });
+
+        let boards_section = scrollable(boards_container)
+            .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(2)
+                    .scroller_width(2)
+            ));
+
+        // Wrap boards section in stack if animating button position
+        let boards_with_animation: Element<Message> = if animation_active && animation_type == BoardAnimationType::ButtonPositionChange {
+            println!("DEBUG: Creating stacked animated button at progress {:.2}", progress);
+
+            let board_count = self.boards.len();
+            let spacing = 5.0;
+            let button_height = 36.0;
+            let item_height = button_height + spacing;
+
+            // Calculate button Y position relative to boards section
+            let start_y = if self.config.general.new_board_button_at_top {
+                // Moving from bottom to top
+                5.0 + (board_count as f32 * item_height) // 5.0 is top padding
+            } else {
+                // Moving from top to bottom
+                5.0
+            };
+
+            let end_y = if self.config.general.new_board_button_at_top {
+                5.0
+            } else {
+                5.0 + (board_count as f32 * item_height)
+            };
+
+            let current_y = start_y + (end_y - start_y) * progress;
+
+            println!("DEBUG: Stacked button Y: {:.1} (start: {:.1}, end: {:.1})", current_y, start_y, end_y);
+
+            let add_board_btn_style = CardButtonStyle {
+                background: self.theme.button_background_hovered(),
+                background_hovered: self.theme.button_background_hovered(),
+                text_color: self.theme.button_text(),
+                border_color: self.theme.button_border(),
+                shadow_color: self.theme.button_shadow(),
+            };
+
+            let animated_button_overlay = container(
+                button(
+                    container(
+                        text("+ Add New Board").size(14)
+                    )
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .align_x(Alignment::Start)
+                        .align_y(Alignment::Center)
+                        .padding(Padding {
+                            top: 0.0,
+                            right: 10.0,
+                            bottom: 0.0,
+                            left: 10.0,
+                        })
+                )
+                .height(36)
+                .width(Length::Fill)
+                .class(add_board_btn_style)
+                .on_press(Message::AddNewBoard)
+            )
+            .width(Length::Fill)
+            .padding(Padding {
+                top: current_y,
+                right: 10.0,
+                bottom: 0.0,
+                left: 10.0,
+            });
+
+            // Stack the boards section with the animated button on top
+            stack![
+                boards_section,
+                animated_button_overlay
+            ].into()
+        } else {
+            boards_section.into()
+        };
+
         let sidebar_content = column![
             container(top_row)
                 .width(Length::Fill)
@@ -1298,7 +1986,7 @@ impl Cards {
                     bottom: 0.0,
                     left: 20.0,
                 }),
-            Space::with_height(Length::Fill),
+            boards_with_animation,
             container(separator)
                 .width(Length::Fill)
                 .padding(Padding {
@@ -2072,6 +2760,12 @@ impl Cards {
                     Message::SetAnimationsEnabled(!self.config.general.enable_animations),
                 );
 
+                let board_btn_label = text("New board button at top").size(14);
+                let board_btn_toggle = self.build_toggle_button(
+                    self.config.general.new_board_button_at_top,
+                    Message::SetNewBoardButtonAtTop(!self.config.general.new_board_button_at_top),
+                );
+
                 column![
                     text("General Settings").size(16).font(iced::Font {
                         weight: iced::font::Weight::Bold,
@@ -2083,15 +2777,20 @@ impl Cards {
                         Space::with_width(Length::Fill),
                         sidebar_open_btn,
                     ]
-                    .spacing(8)
                     .align_y(Alignment::Center),
-                    Space::with_height(10),
+                    Space::with_height(15),
                     row![
                         animations_label,
                         Space::with_width(Length::Fill),
                         animations_btn,
                     ]
-                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    Space::with_height(15),
+                    row![
+                        board_btn_label,
+                        Space::with_width(Length::Fill),
+                        board_btn_toggle,
+                    ]
                     .align_y(Alignment::Center),
                 ]
                 .spacing(10)

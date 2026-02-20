@@ -35,6 +35,13 @@ pub struct GeneralConfig {
 
     #[serde(default = "default_true")]
     pub enable_animations: bool,
+
+    #[serde(default = "default_false")]
+    pub new_board_button_at_top: bool,
+}
+
+fn default_false() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +128,7 @@ impl Default for GeneralConfig {
         Self {
             sidebar_open_on_start: default_true(),
             enable_animations: default_true(),
+            new_board_button_at_top: default_false(),
         }
     }
 }
@@ -279,6 +287,12 @@ impl Config {
     /// Update animations enabled and save
     pub fn set_animations_enabled(&mut self, enabled: bool) -> Result<(), ConfigError> {
         self.general.enable_animations = enabled;
+        self.save()
+    }
+
+    /// Update new board button position and save
+    pub fn set_new_board_button_at_top(&mut self, at_top: bool) -> Result<(), ConfigError> {
+        self.general.new_board_button_at_top = at_top;
         self.save()
     }
 

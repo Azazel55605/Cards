@@ -221,6 +221,11 @@ impl DotGrid {
     pub fn cards_mut(&mut self) -> &mut [Card] {
         &mut self.cards
     }
+    
+    pub fn load_cards(&mut self, cards: Vec<Card>) {
+        self.cards = cards;
+        self.cards_cache.clear();
+    }
 
     pub fn delete_card(&mut self, card_id: usize) {
         self.cards.retain(|c| c.id != card_id);
