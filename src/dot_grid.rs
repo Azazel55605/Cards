@@ -50,6 +50,7 @@ pub struct DotGrid {
     card_text: Color,
     font: iced::Font,
     font_size: f32,
+    debug_mode: bool,
 }
 
 impl DotGrid {
@@ -73,20 +74,31 @@ impl DotGrid {
             card_text: Color::from_rgb8(51, 51, 51),
             font: iced::Font::MONOSPACE,
             font_size: 14.0,
+            debug_mode: false,
         }
     }
 
     pub fn set_font(&mut self, font: iced::Font, size: f32) {
-        println!("DEBUG: DotGrid.set_font called - size: {}, cards count: {}", size, self.cards.len());
+        if self.debug_mode {
+            println!("DEBUG: DotGrid.set_font called - size: {}, cards count: {}", size, self.cards.len());
+        }
         self.font = font;
         self.font_size = size;
         // Update all existing cards
         for card in &mut self.cards {
             card.content.set_font(font, size);
-            println!("DEBUG: Updated card {} with font size {}", card.id, size);
+            if self.debug_mode {
+                println!("DEBUG: Updated card {} with font size {}", card.id, size);
+            }
         }
         self.cards_cache.clear();
-        println!("DEBUG: Cards cache cleared");
+        if self.debug_mode {
+            println!("DEBUG: Cards cache cleared");
+        }
+    }
+
+    pub fn set_debug_mode(&mut self, enabled: bool) {
+        self.debug_mode = enabled;
     }
 
     pub fn set_dot_color(&mut self, color: Color) {
@@ -148,11 +160,15 @@ impl DotGrid {
         );
         let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
         let mut card = Card::new(id, snapped_position);
-        println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
+        if self.debug_mode {
+            println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
+        }
         card.content.set_font(self.font, self.font_size);
         self.cards.push(card);
         self.cards_cache.clear();
-        println!("Added card {} at world position {:?}", id, snapped_position);
+        if self.debug_mode {
+            println!("Added card {} at world position {:?}", id, snapped_position);
+        }
         id
     }
 
@@ -171,7 +187,9 @@ impl DotGrid {
         let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
         let mut card = Card::new(id, snapped_position);
         card.content = crate::custom_text_editor::CustomTextEditor::with_text(content);
-        println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
+        if self.debug_mode {
+            println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
+        }
         card.content.set_font(self.font, self.font_size);
         card.icon = icon;
         card.color = color;
@@ -320,28 +338,38 @@ impl DotGrid {
 
     /// Check if a point clicks on a checkbox by computing positions on-the-fly
     pub fn find_clicked_checkbox(&self, screen_pos: Point) -> Option<(usize, usize)> {
-        println!("DEBUG: find_clicked_checkbox at pos: {:?}", screen_pos);
+        if self.debug_mode {
+            println!("DEBUG: find_clicked_checkbox at pos: {:?}", screen_pos);
+        }
 
         // Use the stored checkbox positions from rendering
         // These are the ACTUAL positions where checkboxes were rendered
         for card in &self.cards {
             if !card.is_editing {
-                println!("DEBUG: Checking card {} with {} stored checkbox positions",
-                    card.id, card.checkbox_positions.len());
+                if self.debug_mode {
+                    println!("DEBUG: Checking card {} with {} stored checkbox positions",
+                        card.id, card.checkbox_positions.len());
+                }
 
                 for checkbox_pos in &card.checkbox_positions {
-                    println!("DEBUG: Stored checkbox line_index={}, rect={:?}",
-                        checkbox_pos.line_index, checkbox_pos.rect);
+                    if self.debug_mode {
+                        println!("DEBUG: Stored checkbox line_index={}, rect={:?}",
+                            checkbox_pos.line_index, checkbox_pos.rect);
+                    }
 
                     if checkbox_pos.rect.contains(screen_pos) {
-                        println!("DEBUG: CHECKBOX CLICKED! Returning line_index={}", checkbox_pos.line_index);
+                        if self.debug_mode {
+                            println!("DEBUG: CHECKBOX CLICKED! Returning line_index={}", checkbox_pos.line_index);
+                        }
                         return Some((card.id, checkbox_pos.line_index));
                     }
                 }
             }
         }
 
-        println!("DEBUG: No checkbox found at click position");
+        if self.debug_mode {
+            println!("DEBUG: No checkbox found at click position");
+        }
         None
     }
 

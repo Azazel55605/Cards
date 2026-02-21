@@ -57,14 +57,12 @@ impl CustomTextEditor {
     }
 
     pub fn set_font(&mut self, font: iced::Font, size: f32) {
-        println!("DEBUG: CustomTextEditor.set_font called - old size: {}, new size: {}", self.font_size, size);
         self.font = font;
         self.font_size = size;
-        // Adjust char width and line height based on font size
-        let size_ratio = size / 14.0;
-        self.char_width = DEFAULT_CHAR_WIDTH * size_ratio;
-        self.line_height = DEFAULT_LINE_HEIGHT * size_ratio;
-        println!("DEBUG: Font updated - char_width: {}, line_height: {}", self.char_width, self.line_height);
+        // Recalculate character width and line height based on font size
+        // These are empirically determined scaling factors for monospace fonts
+        self.char_width = 8.43 * (size / 14.0);
+        self.line_height = 21.0 * (size / 14.0);
     }
 
     pub fn text(&self) -> &str {

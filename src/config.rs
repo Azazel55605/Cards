@@ -38,6 +38,9 @@ pub struct GeneralConfig {
 
     #[serde(default = "default_false")]
     pub new_board_button_at_top: bool,
+
+    #[serde(default = "default_false")]
+    pub debug_mode: bool,
 }
 
 fn default_false() -> bool {
@@ -129,6 +132,7 @@ impl Default for GeneralConfig {
             sidebar_open_on_start: default_true(),
             enable_animations: default_true(),
             new_board_button_at_top: default_false(),
+            debug_mode: default_false(),
         }
     }
 }
@@ -305,6 +309,11 @@ impl Config {
     /// Update font size and save
     pub fn set_font_size(&mut self, size: f32) -> Result<(), ConfigError> {
         self.appearance.font.size = size;
+        self.save()
+    }
+
+    pub fn set_debug_mode(&mut self, enabled: bool) -> Result<(), ConfigError> {
+        self.general.debug_mode = enabled;
         self.save()
     }
 }

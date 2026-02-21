@@ -214,6 +214,7 @@ pub enum Message {
     CancelRenamingBoard,
     // Settings messages
     SetNewBoardButtonAtTop(bool),
+    SetDebugMode(bool),
 }
 
 struct Cards {
@@ -287,11 +288,17 @@ impl Cards {
             theme.card_border(),
             theme.card_text(),
         );
+        // Set debug mode from config
+        dot_grid.set_debug_mode(config.general.debug_mode);
         // Set font from config
         let font = config.appearance.font.family.to_iced_font();
-        println!("DEBUG: Initializing with font family: {:?}, size: {}", config.appearance.font.family, config.appearance.font.size);
+        if config.general.debug_mode {
+            println!("DEBUG: Initializing with font family: {:?}, size: {}", config.appearance.font.family, config.appearance.font.size);
+        }
         dot_grid.set_font(font, config.appearance.font.size);
-        println!("DEBUG: Font applied to DotGrid");
+        if config.general.debug_mode {
+            println!("DEBUG: Font applied to DotGrid");
+        }
 
         let mut cards = Cards {
             theme,
@@ -397,24 +404,32 @@ impl Cards {
                 }
             }
             Message::SetFontFamily(family) => {
-                println!("DEBUG: SetFontFamily called with {:?}", family);
+                if self.config.general.debug_mode {
+                    println!("DEBUG: SetFontFamily called with {:?}", family);
+                }
                 if let Err(e) = self.config.set_font_family(family) {
                     eprintln!("Failed to save font family setting: {}", e);
                 }
                 // Update DotGrid with new font
                 let font = family.to_iced_font();
                 self.dot_grid.set_font(font, self.config.appearance.font.size);
-                println!("DEBUG: Font applied to DotGrid");
+                if self.config.general.debug_mode {
+                    println!("DEBUG: Font applied to DotGrid");
+                }
             }
             Message::SetFontSize(size) => {
-                println!("DEBUG: SetFontSize called with {}", size);
+                if self.config.general.debug_mode {
+                    println!("DEBUG: SetFontSize called with {}", size);
+                }
                 if let Err(e) = self.config.set_font_size(size) {
                     eprintln!("Failed to save font size setting: {}", e);
                 }
                 // Update DotGrid with new font size
                 let font = self.config.appearance.font.family.to_iced_font();
                 self.dot_grid.set_font(font, size);
-                println!("DEBUG: Font size applied to DotGrid");
+                if self.config.general.debug_mode {
+                    println!("DEBUG: Font size applied to DotGrid");
+                }
             }
             Message::Tick(_instant) => {
                 // Calculate delta time since last tick
@@ -473,7 +488,9 @@ impl Cards {
                     self.board_list_animation_progress += 16.0 / BOARD_ANIMATION_DURATION_MS;
 
                     if self.board_list_animation_progress >= 1.0 {
-                        println!("DEBUG: Animation complete");
+                        if self.config.general.debug_mode {
+                            println!("DEBUG: Animation complete");
+                        }
                         self.board_list_animation_progress = 1.0;
                         self.board_list_animating = false;
 
@@ -526,7 +543,9 @@ impl Cards {
                         self.board_list_animation_type = BoardAnimationType::None;
                         self.animating_board_index = None;
                     } else {
-                        println!("DEBUG: Animation progress: {:.2}", self.board_list_animation_progress);
+                        if self.config.general.debug_mode {
+                            println!("DEBUG: Animation progress: {:.2}", self.board_list_animation_progress);
+                        }
                     }
                 }
 
@@ -701,10 +720,14 @@ impl Cards {
                         // Toggle checkbox in the card's markdown text
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             let text = card.content.text();
-                            println!("DEBUG: CheckboxToggle - card_id: {}, line_index: {}", card_id, line_index);
-                            println!("DEBUG: Text before toggle:\n{}", text);
-                            let updated_text = Self::toggle_checkbox_in_text(&text, line_index);
-                            println!("DEBUG: Text after toggle:\n{}", updated_text);
+                            if self.config.general.debug_mode {
+                                println!("DEBUG: CheckboxToggle - card_id: {}, line_index: {}", card_id, line_index);
+                                println!("DEBUG: Text before toggle:\n{}", text);
+                            }
+                            let updated_text = Self::toggle_checkbox_in_text(&text, line_index, self.config.general.debug_mode);
+                            if self.config.general.debug_mode {
+                                println!("DEBUG: Text after toggle:\n{}", updated_text);
+                            }
                             card.content.set_text(updated_text);
                             self.dot_grid.clear_cards_cache();
                             // Update checkbox positions after content change
@@ -1322,7 +1345,9 @@ impl Cards {
             Message::SetNewBoardButtonAtTop(at_top) => {
                 // Trigger button position change animation if animations enabled
                 if self.config.general.enable_animations {
-                    println!("DEBUG: Starting ButtonPositionChange animation");
+                    if self.config.general.debug_mode {
+                        println!("DEBUG: Starting ButtonPositionChange animation");
+                    }
                     self.board_list_animating = true;
                     self.board_list_animation_progress = 0.0;
                     self.board_list_animation_type = BoardAnimationType::ButtonPositionChange;
@@ -1332,6 +1357,13 @@ impl Cards {
                 if let Err(e) = self.config.set_new_board_button_at_top(at_top) {
                     eprintln!("Failed to save new board button position setting: {}", e);
                 }
+            }
+            Message::SetDebugMode(enabled) => {
+                if let Err(e) = self.config.set_debug_mode(enabled) {
+                    eprintln!("Failed to save debug mode setting: {}", e);
+                }
+                // Update DotGrid debug mode
+                self.dot_grid.set_debug_mode(enabled);
             }
         }
         Task::none()
@@ -1345,12 +1377,14 @@ impl Cards {
 
     /// Toggle a checkbox at the specified line index in markdown text
     /// This must match exactly how the text_processor and markdown_parser work
-    fn toggle_checkbox_in_text(text: &str, line_index: usize) -> String {
+    fn toggle_checkbox_in_text(text: &str, line_index: usize, debug_mode: bool) -> String {
         let mut result = String::new();
         let mut checkbox_counter = 0;  // Global counter across ALL md blocks
         let mut pos = 0;
 
-        println!("DEBUG: toggle_checkbox_in_text - looking for line_index: {}", line_index);
+        if debug_mode {
+            println!("DEBUG: toggle_checkbox_in_text - looking for line_index: {}", line_index);
+        }
 
         while pos < text.len() {
             // Look for <md> tag
@@ -1367,7 +1401,9 @@ impl Cards {
                     let actual_md_end = md_content_start + md_end;
                     let markdown_content = &text[md_content_start..actual_md_end];
 
-                    println!("DEBUG: Found md block, content: '{}'", markdown_content);
+                    if debug_mode {
+                        println!("DEBUG: Found md block, content: '{}'", markdown_content);
+                    }
 
                     // Process each line in the markdown content
                     for line in markdown_content.lines() {
@@ -1376,9 +1412,13 @@ impl Cards {
                                          line.trim_start().starts_with("- [X]");
 
                         if is_checkbox {
-                            println!("DEBUG: Found checkbox at counter {}: '{}'", checkbox_counter, line);
+                            if debug_mode {
+                                println!("DEBUG: Found checkbox at counter {}: '{}'", checkbox_counter, line);
+                            }
                             if checkbox_counter == line_index {
-                                println!("DEBUG: MATCH! Toggling checkbox");
+                                if debug_mode {
+                                    println!("DEBUG: MATCH! Toggling checkbox");
+                                }
                                 // Toggle this checkbox
                                 if line.contains("- [ ]") {
                                     result.push_str(&line.replace("- [ ]", "- [x]"));
@@ -3099,6 +3139,20 @@ impl Cards {
                     Space::with_height(20),
                     text("Config file location:").size(12),
                     text(config_path).size(12),
+                    Space::with_height(30),
+                    // Debug mode toggle
+                    row![
+                        text("Debug Mode").size(14),
+                        Space::with_width(Length::Fill),
+                        self.build_toggle_button(
+                            self.config.general.debug_mode,
+                            Message::SetDebugMode(!self.config.general.debug_mode)
+                        ),
+                    ]
+                    .align_y(Alignment::Center)
+                    .spacing(10),
+                    text("Enable debug output in the console").size(12)
+                        .color(Color::from_rgb(0.5, 0.5, 0.5)),
                 ]
                 .spacing(10)
                 .into()
