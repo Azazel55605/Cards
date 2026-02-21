@@ -580,19 +580,42 @@ impl Cards {
                     DotGridMessage::CardLeftClickBody(card_id) => {
                         // Special case: if card_id is usize::MAX, it means stop editing
                         if card_id == usize::MAX {
-                            // Stop editing any card
+                            // Stop editing any card and update checkbox positions
+                            let card_ids: Vec<usize> = self.dot_grid.cards_mut()
+                                .iter()
+                                .filter(|c| c.is_editing)
+                                .map(|c| c.id)
+                                .collect();
+
                             for card in self.dot_grid.cards_mut().iter_mut() {
                                 if card.is_editing {
                                     card.is_editing = false;
                                 }
                             }
+
+                            // Update checkbox positions for cards that were editing
+                            for id in card_ids {
+                                self.dot_grid.update_card_checkbox_positions(id);
+                            }
+
                             self.editing_card_id = None;
                             self.selected_card_id = None;
                             self.dot_grid.clear_cards_cache();
                         } else {
-                            // First, stop editing ALL cards
+                            // First, stop editing ALL cards and update their checkbox positions
+                            let previously_editing: Vec<usize> = self.dot_grid.cards_mut()
+                                .iter()
+                                .filter(|c| c.is_editing)
+                                .map(|c| c.id)
+                                .collect();
+
                             for card in self.dot_grid.cards_mut().iter_mut() {
                                 card.is_editing = false;
+                            }
+
+                            // Update checkbox positions for previously editing cards
+                            for id in previously_editing {
+                                self.dot_grid.update_card_checkbox_positions(id);
                             }
 
                             // Start editing the card and select it
@@ -678,9 +701,14 @@ impl Cards {
                         // Toggle checkbox in the card's markdown text
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             let text = card.content.text();
+                            println!("DEBUG: CheckboxToggle - card_id: {}, line_index: {}", card_id, line_index);
+                            println!("DEBUG: Text before toggle:\n{}", text);
                             let updated_text = Self::toggle_checkbox_in_text(&text, line_index);
+                            println!("DEBUG: Text after toggle:\n{}", updated_text);
                             card.content.set_text(updated_text);
                             self.dot_grid.clear_cards_cache();
+                            // Update checkbox positions after content change
+                            self.dot_grid.update_card_checkbox_positions(card_id);
                             self.save_state();
                         }
                     }
@@ -1232,6 +1260,12 @@ impl Cards {
                         let new_board_cards = self.board_cards.get(&index).cloned().unwrap_or_default();
                         self.dot_grid.load_cards(new_board_cards);
 
+                        // Update checkbox positions for all loaded cards
+                        let card_ids: Vec<usize> = self.dot_grid.cards().iter().map(|c| c.id).collect();
+                        for card_id in card_ids {
+                            self.dot_grid.update_card_checkbox_positions(card_id);
+                        }
+
                         // Clear the cards cache to force re-render
                         self.dot_grid.clear_cards_cache();
                     }
@@ -1310,49 +1344,74 @@ impl Cards {
     }
 
     /// Toggle a checkbox at the specified line index in markdown text
+    /// This must match exactly how the text_processor and markdown_parser work
     fn toggle_checkbox_in_text(text: &str, line_index: usize) -> String {
-        let mut current_line_in_list = 0;
         let mut result = String::new();
-        let mut in_md_block = false;
-        
-        for line in text.lines() {
-            // Track if we're inside <md> tags
-            if line.trim().starts_with("<md>") {
-                in_md_block = true;
-            }
-            
-            // Only process checkboxes in markdown blocks
-            if in_md_block {
-                // Check if this is a checkbox line
-                if line.trim_start().starts_with("- [ ]") || line.trim_start().starts_with("- [x]") || line.trim_start().starts_with("- [X]") {
-                    if current_line_in_list == line_index {
-                        // Toggle this checkbox
-                        if line.contains("- [ ]") {
-                            result.push_str(&line.replace("- [ ]", "- [x]"));
+        let mut checkbox_counter = 0;  // Global counter across ALL md blocks
+        let mut pos = 0;
+
+        println!("DEBUG: toggle_checkbox_in_text - looking for line_index: {}", line_index);
+
+        while pos < text.len() {
+            // Look for <md> tag
+            if let Some(md_start) = text[pos..].find("<md>") {
+                let actual_md_start = pos + md_start;
+
+                // Copy everything before <md> tag
+                result.push_str(&text[pos..actual_md_start]);
+                result.push_str("<md>");
+
+                // Find closing </md> tag
+                let md_content_start = actual_md_start + 4;
+                if let Some(md_end) = text[md_content_start..].find("</md>") {
+                    let actual_md_end = md_content_start + md_end;
+                    let markdown_content = &text[md_content_start..actual_md_end];
+
+                    println!("DEBUG: Found md block, content: '{}'", markdown_content);
+
+                    // Process each line in the markdown content
+                    for line in markdown_content.lines() {
+                        let is_checkbox = line.trim_start().starts_with("- [ ]") ||
+                                         line.trim_start().starts_with("- [x]") ||
+                                         line.trim_start().starts_with("- [X]");
+
+                        if is_checkbox {
+                            println!("DEBUG: Found checkbox at counter {}: '{}'", checkbox_counter, line);
+                            if checkbox_counter == line_index {
+                                println!("DEBUG: MATCH! Toggling checkbox");
+                                // Toggle this checkbox
+                                if line.contains("- [ ]") {
+                                    result.push_str(&line.replace("- [ ]", "- [x]"));
+                                } else {
+                                    result.push_str(&line.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]"));
+                                }
+                            } else {
+                                result.push_str(line);
+                            }
+                            checkbox_counter += 1;
                         } else {
-                            result.push_str(&line.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]"));
+                            result.push_str(line);
                         }
-                    } else {
-                        result.push_str(line);
+                        result.push('\n');
                     }
-                    current_line_in_list += 1;
+
+                    // Remove trailing newline if markdown_content didn't end with one
+                    if !markdown_content.ends_with('\n') && result.ends_with('\n') {
+                        result.pop();
+                    }
+
+                    result.push_str("</md>");
+                    pos = actual_md_end + 5; // Move past </md>
                 } else {
-                    result.push_str(line);
+                    // No closing tag found, copy rest as-is
+                    result.push_str(&text[actual_md_start..]);
+                    break;
                 }
             } else {
-                result.push_str(line);
+                // No more <md> tags, copy rest
+                result.push_str(&text[pos..]);
+                break;
             }
-            
-            result.push('\n');
-            
-            if line.trim().starts_with("</md>") {
-                in_md_block = false;
-            }
-        }
-        
-        // Remove trailing newline if original didn't have one
-        if !text.ends_with('\n') && result.ends_with('\n') {
-            result.pop();
         }
         
         result

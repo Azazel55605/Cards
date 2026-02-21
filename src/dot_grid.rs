@@ -253,44 +253,66 @@ impl DotGrid {
 
     /// Update checkbox positions for a card after rendering
     pub fn update_card_checkbox_positions(&mut self, card_id: usize) {
+        use crate::text_processor::TextProcessor;
+
         if let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) {
+            card.checkbox_positions.clear();
+
             if !card.is_editing {
                 let content_text = card.content.text();
                 if !content_text.is_empty() {
-                    // Calculate positions similar to draw_cards
-                    let top_bar_height = 30.0;
-                    let text_x = card.current_position.x + self.offset.x + 10.0;
-                    let text_y = card.current_position.y + self.offset.y + top_bar_height + 10.0;
-                    let max_width = card.width - 20.0;
-                    let max_height = card.height - top_bar_height - 20.0;
-
-                    let renderer = MarkdownRenderer::with_fonts_size_and_height(
-                        self.card_text,
-                        max_width,
-                        max_height,
-                        self.font,
-                        self.font_size
-                    );
-
-                    // Create a dummy frame to get checkbox positions
-                    // In practice, we need to extract this from actual rendering
-                    // For now, we'll compute it separately
-                    use crate::text_processor::TextProcessor;
+                    // Process the text to get the document (matches what renderer does)
                     let processor = TextProcessor::with_font_size(self.font_size);
                     let document = processor.process(&content_text);
 
-                    use crate::text_renderer::TextRenderer;
-                    let text_renderer = TextRenderer::with_fonts_and_height(
-                        self.card_text,
-                        max_width,
-                        max_height,
-                        self.font,
-                        self.font
-                    );
+                    // Calculate checkbox positions exactly as the renderer does
+                    let top_bar_height = 30.0;
+                    let card_screen_x = card.current_position.x + self.offset.x;
+                    let card_screen_y = card.current_position.y + self.offset.y;
+                    let text_x = 10.0;
+                    let text_y = top_bar_height + 10.0;
 
-                    // We need to compute checkbox positions without rendering
-                    // This is a simplified approach - store positions during actual render
-                    card.checkbox_positions.clear();
+                    let mut current_y = 0.0;
+
+                    for line in &document.lines {
+                        if line.is_empty() {
+                            current_y += 8.0;
+                            continue;
+                        }
+
+                        // Add spacing before line
+                        current_y += line.spacing_before;
+
+                        // Calculate line height matching renderer logic
+                        let max_size = line.segments.iter()
+                            .map(|seg| seg.style.size)
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap_or(14.0);
+                        let line_height = 21.0 * (max_size / 14.0);
+
+                        // If line has a checkbox, store its position
+                        if let Some(checkbox) = &line.checkbox {
+                            let checkbox_size = 14.0;
+                            let checkbox_x = text_x - 20.0 + line.indent;
+                            let checkbox_y = current_y + 2.0;
+
+                            let checkbox_rect = Rectangle {
+                                x: card_screen_x + checkbox_x,
+                                y: card_screen_y + text_y + checkbox_y,
+                                width: checkbox_size,
+                                height: checkbox_size,
+                            };
+
+                            card.checkbox_positions.push(crate::text_renderer::CheckboxPosition {
+                                rect: checkbox_rect,
+                                line_index: checkbox.line_index,
+                                checked: checkbox.checked,
+                            });
+                        }
+
+                        // Update Y position
+                        current_y += line_height + line.spacing_after;
+                    }
                 }
             }
         }
@@ -298,81 +320,28 @@ impl DotGrid {
 
     /// Check if a point clicks on a checkbox by computing positions on-the-fly
     pub fn find_clicked_checkbox(&self, screen_pos: Point) -> Option<(usize, usize)> {
-        use crate::text_processor::TextProcessor;
-        use crate::text_renderer::TextRenderer;
+        println!("DEBUG: find_clicked_checkbox at pos: {:?}", screen_pos);
 
+        // Use the stored checkbox positions from rendering
+        // These are the ACTUAL positions where checkboxes were rendered
         for card in &self.cards {
             if !card.is_editing {
-                let content_text = card.content.text();
-                if content_text.is_empty() {
-                    continue;
-                }
+                println!("DEBUG: Checking card {} with {} stored checkbox positions",
+                    card.id, card.checkbox_positions.len());
 
-                let top_bar_height = 30.0;
-                let card_screen_x = card.current_position.x + self.offset.x;
-                let card_screen_y = card.current_position.y + self.offset.y;
+                for checkbox_pos in &card.checkbox_positions {
+                    println!("DEBUG: Stored checkbox line_index={}, rect={:?}",
+                        checkbox_pos.line_index, checkbox_pos.rect);
 
-                // Check if click is even within the card
-                let card_rect = Rectangle {
-                    x: card_screen_x,
-                    y: card_screen_y,
-                    width: card.width,
-                    height: card.height,
-                };
-
-                if !card_rect.contains(screen_pos) {
-                    continue;
-                }
-
-                // Compute checkbox positions for this card
-                let text_x = 10.0;
-                let text_y = top_bar_height + 10.0;
-                let max_width = card.width - 20.0;
-                let max_height = card.height - top_bar_height - 20.0;
-
-                let processor = TextProcessor::with_font_size(self.font_size);
-                let document = processor.process(&content_text);
-
-                let text_renderer = TextRenderer::with_fonts_and_height(
-                    self.card_text,
-                    max_width,
-                    max_height,
-                    self.font,
-                    self.font
-                );
-
-                // We need to extract checkbox positions without actually rendering
-                // Since rendering requires a Frame, let's check the document directly
-                let mut line_y = 0.0;
-                let mut checkbox_index = 0; // Match the checkbox_counter from parsing
-
-                for (_idx, line) in document.lines.iter().enumerate() {
-                    if let Some(checkbox) = &line.checkbox {
-                        let checkbox_size = 14.0;
-                        let checkbox_x = text_x - 20.0 + line.indent;
-                        let checkbox_y = line_y + text_y + line.spacing_before + 2.0;
-
-                        let checkbox_screen_rect = Rectangle {
-                            x: card_screen_x + checkbox_x,
-                            y: card_screen_y + checkbox_y,
-                            width: checkbox_size,
-                            height: checkbox_size,
-                        };
-
-                        if checkbox_screen_rect.contains(screen_pos) {
-                            // Return the checkbox_index, not the line_index from checkbox
-                            return Some((card.id, checkbox_index));
-                        }
-
-                        checkbox_index += 1;
+                    if checkbox_pos.rect.contains(screen_pos) {
+                        println!("DEBUG: CHECKBOX CLICKED! Returning line_index={}", checkbox_pos.line_index);
+                        return Some((card.id, checkbox_pos.line_index));
                     }
-
-                    // Approximate line height
-                    let line_height = 21.0 * (self.font_size / 14.0);
-                    line_y += line.spacing_before + line_height + line.spacing_after;
                 }
             }
         }
+
+        println!("DEBUG: No checkbox found at click position");
         None
     }
 
@@ -518,6 +487,9 @@ impl DotGrid {
                     self.font_size
                 );
                 let (_height, _checkbox_positions) = renderer.render(frame, &content_text, Point::new(text_x, text_y));
+
+                // Note: Checkbox positions are updated via update_card_checkbox_positions()
+                // which is called after editing or content changes
             }
 
             // Draw editing indicator (use card's color for border when editing)
