@@ -250,7 +250,6 @@ struct Cards {
     // Card editing state
     editing_card_id: Option<usize>,
     selected_card_id: Option<usize>,  // Track selected card for toolbar
-    clipboard_text: String,  // Store clipboard content
     // Board management
     boards: Vec<String>,  // List of board names
     active_board_index: usize,  // Currently active board
@@ -334,7 +333,6 @@ impl Cards {
             card_icon_menu_card_id: None,
             editing_card_id: None,
             selected_card_id: None,
-            clipboard_text: String::new(),
             boards: vec!["Board 1".to_string()],
             active_board_index: 0,
             hovered_board_index: None,
@@ -1195,28 +1193,76 @@ impl Cards {
                                                     true
                                                 }
                                                 "C" => {
-                                                    // Copy selected text to internal clipboard
+                                                    // Copy selected text to system clipboard
                                                     if let Some(text) = card.content.get_selected_text() {
-                                                        self.clipboard_text = text;
+                                                        match arboard::Clipboard::new() {
+                                                            Ok(mut clipboard) => {
+                                                                match clipboard.set_text(text.clone()) {
+                                                                    Ok(_) => {
+                                                                        if self.config.general.debug_mode {
+                                                                            println!("DEBUG: Successfully copied to clipboard: {:?}", text);
+                                                                        }
+                                                                    }
+                                                                    Err(e) => {
+                                                                        eprintln!("ERROR: Failed to copy to clipboard: {:?}", e);
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!("ERROR: Failed to create clipboard for copy: {:?}", e);
+                                                            }
+                                                        }
                                                     }
                                                     true
                                                 }
                                                 "X" => {
-                                                    // Cut: copy to clipboard then delete
+                                                    // Cut: copy to system clipboard then delete
                                                     if let Some(text) = card.content.get_selected_text() {
-                                                        self.clipboard_text = text;
+                                                        match arboard::Clipboard::new() {
+                                                            Ok(mut clipboard) => {
+                                                                match clipboard.set_text(text.clone()) {
+                                                                    Ok(_) => {
+                                                                        if self.config.general.debug_mode {
+                                                                            println!("DEBUG: Successfully cut to clipboard: {:?}", text);
+                                                                        }
+                                                                    }
+                                                                    Err(e) => {
+                                                                        eprintln!("ERROR: Failed to cut to clipboard: {:?}", e);
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!("ERROR: Failed to create clipboard for cut: {:?}", e);
+                                                            }
+                                                        }
                                                     }
                                                     card.content.delete_selection();
                                                     true
                                                 }
                                                 "V" => {
-                                                    // Paste from internal clipboard
-                                                    if !self.clipboard_text.is_empty() {
-                                                        // Delete selection first if any
-                                                        card.content.delete_selection();
-                                                        // Insert clipboard content
-                                                        for ch in self.clipboard_text.chars() {
-                                                            card.content.insert_char(ch);
+                                                    // Paste from system clipboard
+                                                    match arboard::Clipboard::new() {
+                                                        Ok(mut clipboard) => {
+                                                            match clipboard.get_text() {
+                                                                Ok(text) => {
+                                                                    if self.config.general.debug_mode {
+                                                                        println!("DEBUG: Successfully read from clipboard, length: {}, content: {:?}", text.len(), &text[..text.len().min(50)]);
+                                                                    }
+                                                                    // Delete selection first if any
+                                                                    card.content.delete_selection();
+                                                                    // Insert clipboard content
+                                                                    card.content.insert_text(&text);
+                                                                    if self.config.general.debug_mode {
+                                                                        println!("DEBUG: Text inserted into editor");
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    eprintln!("ERROR: Failed to read from clipboard: {:?}", e);
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!("ERROR: Failed to create clipboard for paste: {:?}", e);
                                                         }
                                                     }
                                                     true
