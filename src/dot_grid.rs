@@ -13,6 +13,7 @@ pub struct DotGridState {
     resize_start_size: Option<(f32, f32)>, // (width, height)
     resize_start_pos: Option<Point>,
     hovered_card: Option<usize>, // NEW: Track which card is hovered
+    selecting_text_card: Option<usize>, // Track which card is being text-selected
 }
 
 impl Default for DotGridState {
@@ -27,6 +28,7 @@ impl Default for DotGridState {
             resize_start_size: None,
             resize_start_pos: None,
             hovered_card: None,
+            selecting_text_card: None,
         }
     }
 }
@@ -665,6 +667,8 @@ pub enum DotGridMessage {
     CardRightClickIcon(usize),
     CardLeftClickBar(usize, Point),
     CardLeftClickBody(usize),
+    CardTextClick(usize, Point), // (card_id, click_position) - for text selection
+    CardTextDrag(usize, Point), // (card_id, drag_position) - for text selection drag
     CardDrag(usize, Point, Point),
     CardDrop(usize),
     CardResizeStart(usize, Point),
@@ -767,11 +771,12 @@ impl Program<DotGridMessage> for &DotGrid {
                                             );
                                         }
 
-                                        // If editing, ignore click so text editor gets it
+                                        // If editing, send click to text editor for cursor positioning
                                         if card.is_editing {
+                                            state.selecting_text_card = Some(card.id);
                                             return (
-                                                iced::widget::canvas::event::Status::Ignored,
-                                                None,
+                                                iced::widget::canvas::event::Status::Captured,
+                                                Some(DotGridMessage::CardTextClick(card.id, pos)),
                                             );
                                         }
 
@@ -822,6 +827,11 @@ impl Program<DotGridMessage> for &DotGrid {
                                 Some(DotGridMessage::CardDrop(card_id)),
                             );
                         }
+
+                        // Clear text selection state
+                        if state.selecting_text_card.is_some() {
+                            state.selecting_text_card = None;
+                        }
                     }
                     mouse::Event::ButtonPressed(mouse::Button::Right) => {
                         if let Some(pos) = current_pos {
@@ -870,6 +880,14 @@ impl Program<DotGridMessage> for &DotGrid {
                                 return (
                                     iced::widget::canvas::event::Status::Captured,
                                     Some(DotGridMessage::Pan(delta)),
+                                );
+                            }
+                        } else if let Some(card_id) = state.selecting_text_card {
+                            // Handle text selection drag
+                            if let Some(pos) = current_pos {
+                                return (
+                                    iced::widget::canvas::event::Status::Captured,
+                                    Some(DotGridMessage::CardTextDrag(card_id, pos)),
                                 );
                             }
                         } else if let Some(card_id) = state.resizing_card {

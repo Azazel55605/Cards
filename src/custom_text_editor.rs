@@ -385,6 +385,100 @@ impl CustomTextEditor {
         self.last_blink = Instant::now();
     }
 
+    /// Position cursor based on mouse click coordinates
+    /// relative_x and relative_y are relative to the text area origin
+    pub fn click_at_position(&mut self, relative_x: f32, relative_y: f32) {
+        // Calculate which line was clicked based on y position
+        let line_index = ((relative_y / self.line_height) as usize).max(0);
+
+        // Get the lines
+        let lines: Vec<&str> = self.text.split('\n').collect();
+
+        if line_index >= lines.len() {
+            // Clicked beyond last line - move to end
+            self.cursor_position = self.text.len();
+            self.selection_start = None;
+            self.last_blink = Instant::now();
+            return;
+        }
+
+        // Calculate byte offset to the start of this line
+        let mut line_start_offset = 0;
+        for i in 0..line_index {
+            if i < lines.len() {
+                line_start_offset += lines[i].len() + 1; // +1 for newline
+            }
+        }
+
+        // Calculate character position within the line based on x
+        let line = lines[line_index];
+        let char_index = (relative_x / self.char_width).round() as usize;
+
+        // Find the byte offset within the line
+        let mut byte_offset = 0;
+        let mut char_count = 0;
+        for ch in line.chars() {
+            if char_count >= char_index {
+                break;
+            }
+            byte_offset += ch.len_utf8();
+            char_count += 1;
+        }
+
+        // Set cursor position
+        self.cursor_position = line_start_offset + byte_offset.min(line.len());
+        self.selection_start = None;
+        self.last_blink = Instant::now();
+    }
+
+    /// Position cursor and start/extend selection based on drag
+    pub fn drag_to_position(&mut self, relative_x: f32, relative_y: f32) {
+        // If no selection started yet, start one from current cursor position
+        if self.selection_start.is_none() {
+            self.selection_start = Some(self.cursor_position);
+        }
+
+        // Calculate which line was dragged to
+        let line_index = ((relative_y / self.line_height) as usize).max(0);
+
+        // Get the lines
+        let lines: Vec<&str> = self.text.split('\n').collect();
+
+        if line_index >= lines.len() {
+            // Dragged beyond last line - move to end
+            self.cursor_position = self.text.len();
+            self.last_blink = Instant::now();
+            return;
+        }
+
+        // Calculate byte offset to the start of this line
+        let mut line_start_offset = 0;
+        for i in 0..line_index {
+            if i < lines.len() {
+                line_start_offset += lines[i].len() + 1; // +1 for newline
+            }
+        }
+
+        // Calculate character position within the line based on x
+        let line = lines[line_index];
+        let char_index = (relative_x / self.char_width).round() as usize;
+
+        // Find the byte offset within the line
+        let mut byte_offset = 0;
+        let mut char_count = 0;
+        for ch in line.chars() {
+            if char_count >= char_index {
+                break;
+            }
+            byte_offset += ch.len_utf8();
+            char_count += 1;
+        }
+
+        // Set cursor position (keeping selection_start)
+        self.cursor_position = line_start_offset + byte_offset.min(line.len());
+        self.last_blink = Instant::now();
+    }
+
     pub fn get_selected_text(&self) -> Option<String> {
         if let Some(sel_start) = self.selection_start {
             let start = sel_start.min(self.cursor_position);

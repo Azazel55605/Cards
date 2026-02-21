@@ -835,6 +835,48 @@ impl Cards {
                             self.save_state();
                         }
                     }
+                    DotGridMessage::CardTextClick(card_id, click_pos) => {
+                        // Get canvas offset first (before borrowing cards_mut)
+                        let canvas_offset = self.dot_grid.offset();
+
+                        // Handle mouse click in text editor
+                        if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                            if card.is_editing {
+                                // Calculate relative position within the card's text area
+                                let card_screen_x = card.current_position.x + canvas_offset.x;
+                                let card_screen_y = card.current_position.y + canvas_offset.y;
+                                let top_bar_height = 30.0;
+                                let padding = 10.0;
+
+                                let relative_x = (click_pos.x - card_screen_x - padding).max(0.0);
+                                let relative_y = (click_pos.y - card_screen_y - top_bar_height - padding).max(0.0);
+
+                                card.content.click_at_position(relative_x, relative_y);
+                                self.dot_grid.clear_cards_cache();
+                            }
+                        }
+                    }
+                    DotGridMessage::CardTextDrag(card_id, drag_pos) => {
+                        // Get canvas offset first (before borrowing cards_mut)
+                        let canvas_offset = self.dot_grid.offset();
+
+                        // Handle mouse drag in text editor for selection
+                        if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                            if card.is_editing {
+                                // Calculate relative position within the card's text area
+                                let card_screen_x = card.current_position.x + canvas_offset.x;
+                                let card_screen_y = card.current_position.y + canvas_offset.y;
+                                let top_bar_height = 30.0;
+                                let padding = 10.0;
+
+                                let relative_x = (drag_pos.x - card_screen_x - padding).max(0.0);
+                                let relative_y = (drag_pos.y - card_screen_y - top_bar_height - padding).max(0.0);
+
+                                card.content.drag_to_position(relative_x, relative_y);
+                                self.dot_grid.clear_cards_cache();
+                            }
+                        }
+                    }
                 }
             }
             Message::EventOccurred(event) => {
@@ -1857,7 +1899,7 @@ impl Cards {
                     background: self.theme.button_background_hovered(),
                     background_hovered: self.theme.button_background_hovered(),
                     text_color: self.theme.button_text(),
-                    border_color: Color::TRANSPARENT,
+                    border_color: self.theme.button_border(),
                     shadow_color: Color::TRANSPARENT,
                 }
             } else {
@@ -2614,7 +2656,7 @@ impl Cards {
         }
 
         // Custom scrollbar style
-        let scrollable_style = move |_theme: &IcedTheme, status: iced::widget::scrollable::Status| {
+        let scrollable_style = move |_theme: &IcedTheme, _status: iced::widget::scrollable::Status| {
             use iced::widget::scrollable::{Rail, Scroller};
             iced::widget::scrollable::Style {
                 container: iced::widget::container::Style::default(),
