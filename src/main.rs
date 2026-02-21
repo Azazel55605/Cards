@@ -234,6 +234,13 @@ struct Cards {
     // Settings state
     settings_open: bool,
     settings_category: SettingsCategory,
+    settings_animating: bool,
+    settings_animation_progress: f32,
+    settings_opening: bool,  // Track if opening (true) or closing (false)
+    // Theme transition
+    theme_transitioning: bool,
+    theme_transition_progress: f32,
+    next_theme: Option<Theme>,
     // Context menu state
     context_menu_position: Option<Point>,
     pending_card_position: Option<Point>,  // Store position for card creation
@@ -315,6 +322,12 @@ impl Cards {
             canvas_animation_progress: 0.0,
             settings_open: false,
             settings_category: SettingsCategory::default(),
+            settings_animating: false,
+            settings_animation_progress: 0.0,
+            settings_opening: false,
+            theme_transitioning: false,
+            theme_transition_progress: 0.0,
+            next_theme: None,
             context_menu_position: None,
             pending_card_position: None,
             card_icon_menu_position: None,
@@ -369,32 +382,75 @@ impl Cards {
                 }
             }
             Message::ToggleTheme => {
-                self.theme = self.theme.toggle();
-                self.update_theme_colors();
-                if let Err(e) = self.config.set_theme(self.theme) {
+                let new_theme = self.theme.toggle();
+                if self.config.general.enable_animations {
+                    // Start theme transition animation
+                    self.next_theme = Some(new_theme);
+                    self.theme_transitioning = true;
+                    self.theme_transition_progress = 0.0;
+                } else {
+                    // Instant theme change
+                    self.theme = new_theme;
+                    self.update_theme_colors();
+                }
+                if let Err(e) = self.config.set_theme(new_theme) {
                     eprintln!("Failed to save theme: {}", e);
                 }
             }
             Message::SetTheme(theme) => {
                 if self.theme != theme {
-                    self.theme = theme;
-                    self.update_theme_colors();
-                    if let Err(e) = self.config.set_theme(self.theme) {
+                    if self.config.general.enable_animations {
+                        // Start theme transition animation
+                        self.next_theme = Some(theme);
+                        self.theme_transitioning = true;
+                        self.theme_transition_progress = 0.0;
+                    } else {
+                        // Instant theme change
+                        self.theme = theme;
+                        self.update_theme_colors();
+                    }
+                    if let Err(e) = self.config.set_theme(theme) {
                         eprintln!("Failed to save theme: {}", e);
                     }
                 }
             }
             Message::ToggleSettings => {
-                self.settings_open = !self.settings_open;
+                if self.config.general.enable_animations {
+                    if self.settings_open {
+                        // Start closing animation
+                        self.settings_opening = false;
+                        self.settings_animating = true;
+                        self.settings_animation_progress = 0.0;
+                    } else {
+                        // Start opening animation
+                        self.settings_open = true;
+                        self.settings_opening = true;
+                        self.settings_animating = true;
+                        self.settings_animation_progress = 0.0;
+                        self.dot_grid.set_effect_enabled(false);
+                        self.update_exclude_region();
+                    }
+                } else {
+                    // Instant toggle
+                    self.settings_open = !self.settings_open;
+                    self.dot_grid.set_effect_enabled(!self.settings_open);
+                    self.update_exclude_region();
+                }
                 self.context_menu_position = None;
                 self.pending_card_position = None;
-                self.dot_grid.set_effect_enabled(!self.settings_open);
-                self.update_exclude_region();
             }
             Message::CloseSettings => {
-                self.settings_open = false;
-                self.dot_grid.set_effect_enabled(true);
-                self.update_exclude_region();
+                if self.config.general.enable_animations && self.settings_open {
+                    // Start closing animation
+                    self.settings_opening = false;
+                    self.settings_animating = true;
+                    self.settings_animation_progress = 0.0;
+                } else {
+                    // Instant close
+                    self.settings_open = false;
+                    self.dot_grid.set_effect_enabled(true);
+                    self.update_exclude_region();
+                }
             }
             Message::SelectSettingsCategory(category) => {
                 self.settings_category = category;
@@ -552,6 +608,44 @@ impl Cards {
                         if self.config.general.debug_mode {
                             println!("DEBUG: Animation progress: {:.2}", self.board_list_animation_progress);
                         }
+                    }
+                }
+
+                // Animate settings modal
+                if self.settings_animating {
+                    self.settings_animation_progress += 16.0 / 200.0; // 200ms animation
+
+                    if self.settings_animation_progress >= 1.0 {
+                        self.settings_animation_progress = 1.0;
+                        self.settings_animating = false;
+
+                        if !self.settings_opening {
+                            // Animation complete for closing
+                            self.settings_open = false;
+                            self.dot_grid.set_effect_enabled(true);
+                            self.update_exclude_region();
+                        }
+                    }
+                }
+
+                // Animate theme transition
+                if self.theme_transitioning {
+                    self.theme_transition_progress += 16.0 / 1000.0; // 1000ms (1 second) animation for smooth diagonal wipe
+
+                    // Switch theme early (at 5% progress) so the wipe reveals the new theme
+                    if self.theme_transition_progress >= 0.05 && self.next_theme.is_some() {
+                        if let Some(new_theme) = self.next_theme {
+                            if self.theme != new_theme {
+                                self.theme = new_theme;
+                                self.update_theme_colors();
+                            }
+                        }
+                    }
+
+                    if self.theme_transition_progress >= 1.0 {
+                        self.theme_transition_progress = 1.0;
+                        self.theme_transitioning = false;
+                        self.next_theme = None;
                     }
                 }
 
@@ -2154,7 +2248,24 @@ impl Cards {
         view = Overlay::new(view, sidebar).into();
 
         // Add settings modal LAST (on top of everything)
-        if self.settings_open {
+        if self.settings_open || self.settings_animating {
+            // Calculate scale based on animation progress
+            let scale = if self.settings_animating {
+                if self.settings_opening {
+                    // Ease out cubic for opening
+                    let t = self.settings_animation_progress;
+                    let eased = 1.0 - (1.0 - t).powi(3);
+                    0.8 + (eased * 0.2) // Scale from 0.8 to 1.0
+                } else {
+                    // Ease in cubic for closing
+                    let t = self.settings_animation_progress;
+                    let eased = 1.0 - t.powi(3);
+                    0.8 + (eased * 0.2) // Scale from 1.0 to 0.8
+                }
+            } else {
+                1.0
+            };
+
             let settings_content = self.build_settings_content();
             let settings_modal: Element<Message> = SettingsModal::new(
                 settings_content,
@@ -2163,10 +2274,154 @@ impl Cards {
             )
             .width(700.0)
             .height(500.0)
+            .scale(scale)
             .on_close(|| Message::CloseSettings)
             .into();
 
             view = Overlay::new(view, settings_modal).into();
+        }
+
+        // Add theme transition overlay - diagonal wipe animation
+        if self.theme_transitioning {
+            let transition_progress = self.theme_transition_progress;
+
+            // Apply cubic bezier easing (ease-in-out) for smooth start and end
+            // Using cubic bezier curve for smooth acceleration and deceleration
+            let t = transition_progress;
+            let eased_progress = if t < 0.5 {
+                // Ease in: slow start
+                4.0 * t * t * t
+            } else {
+                // Ease out: slow end
+                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+            };
+
+            // Get the OLD theme's background color (before transition)
+            // We'll wipe this away to reveal the new theme
+            let wipe_color = if let Some(next_theme) = self.next_theme {
+                // Show the opposite of next theme (the old theme)
+                match next_theme {
+                    Theme::Light => Color::from_rgb(0.1, 0.1, 0.1), // Show dark if going to light
+                    Theme::Dark => Color::from_rgb(0.95, 0.95, 0.95), // Show light if going to dark
+                }
+            } else {
+                Color::from_rgb(0.5, 0.5, 0.5)
+            };
+
+            // Create a canvas-based diagonal wipe effect
+            use iced::widget::canvas::{self, Canvas, Frame, Path};
+            use iced::widget::canvas::Program;
+
+            struct DiagonalWipeOverlay {
+                progress: f32,
+                color: Color,
+            }
+
+            impl Program<Message> for DiagonalWipeOverlay {
+                type State = ();
+
+                fn draw(
+                    &self,
+                    _state: &Self::State,
+                    renderer: &iced::Renderer,
+                    _theme: &iced::Theme,
+                    bounds: iced::Rectangle,
+                    _cursor: iced::mouse::Cursor,
+                ) -> Vec<canvas::Geometry> {
+                    let mut frame = Frame::new(renderer, bounds.size());
+
+                    if self.progress >= 1.0 {
+                        // Wipe complete - draw nothing
+                        return vec![frame.into_geometry()];
+                    }
+
+                    if self.progress <= 0.0 {
+                        // No wipe yet - draw entire screen
+                        let full_rect = Path::rectangle(
+                            iced::Point::ORIGIN,
+                            iced::Size::new(bounds.width, bounds.height)
+                        );
+                        frame.fill(&full_rect, self.color);
+                        return vec![frame.into_geometry()];
+                    }
+
+                    // Simple approach: The wipe edge moves from top-left to bottom-right
+                    // The wipe line is perpendicular to the diagonal
+                    // At progress = 0.5, the wipe line goes through the center
+                    // At progress = 1.0, the wipe line passes through bottom-right corner
+
+                    // Calculate the total distance the wipe needs to travel
+                    // The wipe line travels from (0,0) to beyond (width, height)
+                    // The perpendicular distance it needs to cover is (width + height) / sqrt(2)
+                    let total_wipe_distance = (bounds.width + bounds.height) / 1.414;
+                    let current_wipe_distance = total_wipe_distance * self.progress;
+
+                    // The wipe line is perpendicular to the diagonal (45 degrees)
+                    // Points on the wipe line: it intersects top and left edges
+                    // x_on_top + y_on_left = current_wipe_distance * sqrt(2)
+                    let sum = current_wipe_distance * 1.414;
+
+                    // Intersection with top edge (y=0): x = sum
+                    let x_on_top = sum;
+                    // Intersection with left edge (x=0): y = sum
+                    let y_on_left = sum;
+
+                    // Draw the remaining area (not yet wiped)
+                    let remaining_path = Path::new(|builder| {
+                        if x_on_top < bounds.width {
+                            // Wipe line intersects top edge
+                            builder.move_to(iced::Point::new(x_on_top, 0.0));
+                            builder.line_to(iced::Point::new(bounds.width, 0.0));
+                            builder.line_to(iced::Point::new(bounds.width, bounds.height));
+
+                            if y_on_left < bounds.height {
+                                // Wipe line also intersects left edge
+                                builder.line_to(iced::Point::new(0.0, bounds.height));
+                                builder.line_to(iced::Point::new(0.0, y_on_left));
+                            } else {
+                                // Wipe line intersects bottom edge instead
+                                let x_on_bottom = sum - bounds.height;
+                                if x_on_bottom > 0.0 && x_on_bottom < bounds.width {
+                                    builder.line_to(iced::Point::new(x_on_bottom, bounds.height));
+                                } else {
+                                    builder.line_to(iced::Point::new(0.0, bounds.height));
+                                }
+                            }
+                        } else {
+                            // Wipe line has passed top-right corner
+                            // It now intersects right and bottom (or left) edges
+                            let y_on_right = sum - bounds.width;
+                            if y_on_right < bounds.height {
+                                builder.move_to(iced::Point::new(bounds.width, y_on_right));
+                                builder.line_to(iced::Point::new(bounds.width, bounds.height));
+
+                                let x_on_bottom = sum - bounds.height;
+                                if x_on_bottom > 0.0 && x_on_bottom < bounds.width {
+                                    builder.line_to(iced::Point::new(x_on_bottom, bounds.height));
+                                } else if x_on_bottom <= 0.0 {
+                                    builder.line_to(iced::Point::new(0.0, bounds.height));
+                                }
+                            }
+                            // else: wipe complete
+                        }
+
+                        builder.close();
+                    });
+
+                    frame.fill(&remaining_path, self.color);
+
+                    vec![frame.into_geometry()]
+                }
+            }
+
+            let wipe_overlay = Canvas::new(DiagonalWipeOverlay {
+                progress: eased_progress,
+                color: wipe_color,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+            view = Overlay::new(view, wipe_overlay).into();
         }
 
         view

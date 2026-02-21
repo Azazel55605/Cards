@@ -46,6 +46,7 @@ where
     shadow_color: Color,
     overlay_color: Color,
     on_close: Option<Box<dyn Fn() -> Message + 'a>>,
+    scale: f32,
 }
 
 impl<'a, Message, Renderer> SettingsModal<'a, Message, Renderer>
@@ -66,6 +67,7 @@ where
             shadow_color,
             overlay_color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
             on_close: None,
+            scale: 1.0,
         }
     }
 
@@ -79,7 +81,12 @@ where
         self
     }
 
-    pub fn on_close<F>(mut self, f: F) -> Self 
+    pub fn scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
+        self
+    }
+
+    pub fn on_close<F>(mut self, f: F) -> Self
     where
         F: Fn() -> Message + 'a,
     {
@@ -135,15 +142,26 @@ where
     ) {
         let bounds = layout.bounds();
 
-        // Calculate centered modal position
-        let modal_x = (bounds.width - self.width) / 2.0;
-        let modal_y = (bounds.height - self.height) / 2.0;
+        // Apply scale to dimensions
+        let scaled_width = self.width * self.scale;
+        let scaled_height = self.height * self.scale;
+
+        // Calculate centered modal position (accounting for scale)
+        let modal_x = (bounds.width - scaled_width) / 2.0;
+        let modal_y = (bounds.height - scaled_height) / 2.0;
 
         let modal_bounds = Rectangle {
             x: modal_x,
             y: modal_y,
-            width: self.width,
-            height: self.height,
+            width: scaled_width,
+            height: scaled_height,
+        };
+
+        // Adjust overlay opacity based on scale (fade in/out with animation)
+        let overlay_alpha = self.overlay_color.a * self.scale;
+        let animated_overlay_color = Color {
+            a: overlay_alpha,
+            ..self.overlay_color
         };
 
         // Use a layer to ensure modal renders on top of canvas
@@ -155,7 +173,7 @@ where
                     border: Border::default(),
                     shadow: Shadow::default(),
                 },
-                self.overlay_color,
+                animated_overlay_color,
             );
 
             // Draw modal background with shadow
@@ -168,9 +186,9 @@ where
                         radius: self.border_radius.into(),
                     },
                     shadow: Shadow {
-                        color: self.shadow_color,
-                        offset: Vector::new(0.0, 8.0),
-                        blur_radius: 24.0,
+                        color: Color { a: self.shadow_color.a * self.scale, ..self.shadow_color },
+                        offset: Vector::new(0.0, 8.0 * self.scale),
+                        blur_radius: 24.0 * self.scale,
                     },
                 },
                 self.background,
