@@ -45,6 +45,7 @@ where
     border_radius: f32,
     shadow_color: Color,
     overlay_color: Color,
+    on_close: Option<Box<dyn Fn() -> Message + 'a>>,
 }
 
 impl<'a, Message, Renderer> SettingsModal<'a, Message, Renderer>
@@ -58,12 +59,13 @@ where
     ) -> Self {
         Self {
             content: content.into(),
-            width: 700.0,
-            height: 500.0,
+            width: 600.0,
+            height: 400.0,
             background,
-            border_radius: 16.0,
+            border_radius: 12.0,
             shadow_color,
             overlay_color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+            on_close: None,
         }
     }
 
@@ -74,6 +76,14 @@ where
 
     pub fn height(mut self, height: f32) -> Self {
         self.height = height;
+        self
+    }
+
+    pub fn on_close<F>(mut self, f: F) -> Self 
+    where
+        F: Fn() -> Message + 'a,
+    {
+        self.on_close = Some(Box::new(f));
         self
     }
 }
@@ -272,6 +282,15 @@ where
                     // Return the status from the content widget
                     // This allows pick_list and other interactive widgets to work
                     return status;
+                }
+            } else {
+                // Click is outside the modal
+                if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event {
+                    // Emit close message if configured
+                    if let Some(on_close) = &self.on_close {
+                        shell.publish(on_close());
+                    }
+                    return iced::event::Status::Captured;
                 }
             }
         }

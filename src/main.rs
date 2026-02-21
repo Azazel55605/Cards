@@ -171,6 +171,7 @@ pub enum Message {
     ToggleTheme,
     SetTheme(Theme),
     ToggleSettings,
+    CloseSettings,
     SelectSettingsCategory(SettingsCategory),
     SetSidebarOpenOnStart(bool),
     SetAnimationsEnabled(bool),
@@ -388,6 +389,11 @@ impl Cards {
                 self.context_menu_position = None;
                 self.pending_card_position = None;
                 self.dot_grid.set_effect_enabled(!self.settings_open);
+                self.update_exclude_region();
+            }
+            Message::CloseSettings => {
+                self.settings_open = false;
+                self.dot_grid.set_effect_enabled(true);
                 self.update_exclude_region();
             }
             Message::SelectSettingsCategory(category) => {
@@ -2157,6 +2163,7 @@ impl Cards {
             )
             .width(700.0)
             .height(500.0)
+            .on_close(|| Message::CloseSettings)
             .into();
 
             view = Overlay::new(view, settings_modal).into();
