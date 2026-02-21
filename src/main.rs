@@ -590,6 +590,11 @@ impl Cards {
                             self.selected_card_id = None;
                             self.dot_grid.clear_cards_cache();
                         } else {
+                            // First, stop editing ALL cards
+                            for card in self.dot_grid.cards_mut().iter_mut() {
+                                card.is_editing = false;
+                            }
+
                             // Start editing the card and select it
                             self.editing_card_id = Some(card_id);
                             self.selected_card_id = Some(card_id);
@@ -763,6 +768,11 @@ impl Cards {
                 self.card_icon_menu_card_id = None;
             }
             Message::StartEditingCard(card_id) => {
+                // First, stop editing ALL cards
+                for card in self.dot_grid.cards_mut().iter_mut() {
+                    card.is_editing = false;
+                }
+
                 self.editing_card_id = Some(card_id);
                 if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                     card.is_editing = true;
