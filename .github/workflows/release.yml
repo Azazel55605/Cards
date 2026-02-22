@@ -35,7 +35,7 @@ jobs:
             cross: false
 
           - name: macOS x86_64
-            runner: macos-13
+            runner: macos-14
             target: x86_64-apple-darwin
             artifact: cards
             asset: cards-macos-x86_64
