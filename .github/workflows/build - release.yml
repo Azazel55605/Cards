@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: cards
+            asset: cards-linux-x86_64
+            cross: false
+
+          - name: Linux ARM64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: cards
+            asset: cards-linux-arm64
+            cross: true
+
+          - name: Windows x86_64
+            runner: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            artifact: cards.exe
+            asset: cards-windows-x86_64.exe
+            cross: false
+
+          - name: macOS x86_64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            artifact: cards
+            asset: cards-macos-x86_64
+            cross: false
+
+          - name: macOS ARM64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            artifact: cards
+            asset: cards-macos-arm64
+            cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Install mingw (Windows target)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Build (cargo)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Flatten dist folder
+        run: |
+          for dir in dist/*/; do
+            asset=$(basename "$dir")
+            file=$(ls "$dir")
+            mv "$dir$file" "dist/$asset"
+            rmdir "$dir"
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: dist/*
