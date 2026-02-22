@@ -108,8 +108,9 @@ jobs:
           for dir in dist/*/; do
             asset=$(basename "$dir")
             file=$(ls "$dir")
-            mv "$dir$file" "dist/$asset"
+            mv "$dir$file" "dist/$asset-bin"
             rmdir "$dir"
+            mv "dist/$asset-bin" "dist/$asset"
           done
 
       - name: Create Release
