@@ -2,6 +2,8 @@
 
 A beautiful, fast, and minimal note-taking application built with Rust and [Iced](https://iced.rs/).
 
+[![Rust - Cargo build](https://github.com/Azazel55605/Cards/actions/workflows/rust.yml/badge.svg?branch=master)](https://github.com/Azazel55605/Cards/actions/workflows/rust.yml)
+
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
 
 ## ✨ Overview
