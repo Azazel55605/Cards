@@ -39,7 +39,7 @@ impl button::Catalog for HoverVisibleButtonStyle {
                 border: Border {
                     color: self.border_color,
                     width: 0.0,
-                    radius: 4.0.into(),
+                    radius: 8.0.into(),
                 },
                 shadow: Shadow::default(),
             },
@@ -49,7 +49,7 @@ impl button::Catalog for HoverVisibleButtonStyle {
                 border: Border {
                     color: self.border_color,
                     width: 0.0,
-                    radius: 4.0.into(),
+                    radius: 8.0.into(),
                 },
                 shadow: Shadow::default(),
             },
@@ -72,7 +72,7 @@ impl From<HoverVisibleButtonStyle> for Box<dyn Fn(&IcedTheme, button::Status) ->
                     border: Border {
                         color: style.border_color,
                         width: 0.0,
-                        radius: 4.0.into(),
+                        radius: 8.0.into(),
                     },
                     shadow: Shadow::default(),
                 },
@@ -82,7 +82,7 @@ impl From<HoverVisibleButtonStyle> for Box<dyn Fn(&IcedTheme, button::Status) ->
                     border: Border {
                         color: style.border_color,
                         width: 0.0,
-                        radius: 4.0.into(),
+                        radius: 8.0.into(),
                     },
                     shadow: Shadow::default(),
                 },
@@ -106,7 +106,7 @@ impl button::Catalog for CardButtonStyle {
                 border: Border {
                     color: self.border_color,
                     width: 1.0,
-                    radius: 4.0.into(),
+                    radius: 8.0.into(),
                 },
                 shadow: Shadow {
                     color: self.shadow_color,
@@ -120,7 +120,7 @@ impl button::Catalog for CardButtonStyle {
                 border: Border {
                     color: self.border_color,
                     width: 1.0,
-                    radius: 4.0.into(),
+                    radius: 8.0.into(),
                 },
                 shadow: Shadow {
                     color: self.shadow_color,
@@ -142,7 +142,7 @@ impl From<CardButtonStyle> for Box<dyn Fn(&IcedTheme, button::Status) -> button:
                     border: Border {
                         color: style.border_color,
                         width: 1.0,
-                        radius: 4.0.into(),
+                        radius: 8.0.into(),
                     },
                     shadow: Shadow {
                         color: style.shadow_color,
@@ -156,7 +156,7 @@ impl From<CardButtonStyle> for Box<dyn Fn(&IcedTheme, button::Status) -> button:
                     border: Border {
                         color: style.border_color,
                         width: 1.0,
-                        radius: 4.0.into(),
+                        radius: 8.0.into(),
                     },
                     shadow: Shadow {
                         color: style.shadow_color,

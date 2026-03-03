@@ -2,8 +2,9 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
+use iced::gradient;
 use iced::mouse;
-use iced::{Border, Color, Element, Event, Length, Point, Rectangle, Shadow, Size, Vector};
+use iced::{Border, Color, Element, Event, Length, Point, Radians, Rectangle, Shadow, Size, Vector};
 
 pub struct Sidebar<'a, Message, Renderer = iced::Renderer>
 where
@@ -13,6 +14,7 @@ where
     floating_button: Option<Element<'a, Message, iced::Theme, Renderer>>,
     width: f32,
     background: Color,
+    accent: Color,
     shadow: Color,
     offset: f32,
 }
@@ -25,6 +27,7 @@ where
         content: impl Into<Element<'a, Message, iced::Theme, Renderer>>,
         width: f32,
         background: Color,
+        accent: Color,
         shadow: Color,
         offset: f32,
     ) -> Self {
@@ -33,10 +36,13 @@ where
             floating_button: None,
             width,
             background,
+            accent,
             shadow,
             offset,
         }
     }
+
+    // ...existing code...
 
     pub fn floating_button(mut self, button: impl Into<Element<'a, Message, iced::Theme, Renderer>>) -> Self {
         self.floating_button = Some(button.into());
@@ -124,7 +130,17 @@ where
         if sidebar_x + self.width > 0.0 {
             // Use a layer to ensure sidebar renders on top of canvas (like settings modal)
             renderer.with_layer(full_bounds, |renderer| {
-                // Draw background with shadow
+                // Build vertical gradient: background color at top → subtle accent tint at bottom
+                let gradient = gradient::Linear::new(Radians(std::f32::consts::PI)) // top → bottom
+                    .add_stop(0.0, self.background)
+                    .add_stop(1.0, Color {
+                        r: self.background.r * (1.0 - self.accent.a) + self.accent.r * self.accent.a,
+                        g: self.background.g * (1.0 - self.accent.a) + self.accent.g * self.accent.a,
+                        b: self.background.b * (1.0 - self.accent.a) + self.accent.b * self.accent.a,
+                        a: 1.0,
+                    });
+
+                // Draw background with shadow and gradient
                 renderer.fill_quad(
                     renderer::Quad {
                         bounds: sidebar_bounds,
@@ -139,7 +155,7 @@ where
                             blur_radius: 12.0,
                         },
                     },
-                    self.background,
+                    iced::Background::Gradient(iced::Gradient::Linear(gradient)),
                 );
 
                 // Draw content

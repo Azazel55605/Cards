@@ -2,6 +2,7 @@
 name = "Cards"
 version = "0.1.1"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 iced = { version = "0.13.1", features = ["canvas", "advanced", "tokio", "svg"] }
@@ -9,11 +10,21 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 dirs = "5.0"
 pulldown-cmark = "0.9"
-icondata = "0.1"
 icondata_core = "0.1"
 icondata_bs = "0.1.0"
 syntect = "5.2"
+resvg = "0.45"
+
+# arboard: use wayland-data-control only on Linux (Wayland), plain on all other targets
+[target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.4", features = ["wayland-data-control"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+arboard = { version = "3.4" }
+
+# Embed .ico into the Windows executable (available on all hosts for cross-compilation)
+[build-dependencies]
+winresource = "0.1"
 
 [profile.dev]
 opt-level = 2

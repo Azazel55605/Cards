@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod theme;
 mod button_style;
 mod dot_grid;
@@ -62,6 +64,13 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
             Theme::Dark => Color::from_rgb8(255, 255, 255),
         };
 
+        let accent = self.theme.accent();
+        let accent_glow = self.theme.accent_glow();
+        let text_value = match self.theme {
+            Theme::Light => Color::from_rgb8(0, 0, 0),
+            Theme::Dark => Color::from_rgb8(255, 255, 255),
+        };
+
         match status {
             text_editor::Status::Active => text_editor::Style {
                 background: iced::Background::Color(Color::TRANSPARENT),
@@ -72,41 +81,32 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
                 },
                 icon: cursor_color,
                 placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                value: match self.theme {
-                    Theme::Light => Color::from_rgb8(0, 0, 0),
-                    Theme::Dark => Color::from_rgb8(255, 255, 255),
-                },
-                selection: Color::from_rgba(0.4, 0.6, 1.0, 0.5),
+                value: text_value,
+                selection: accent_glow,
             },
             text_editor::Status::Hovered => text_editor::Style {
                 background: iced::Background::Color(Color::TRANSPARENT),
                 border: iced::Border {
-                    color: Color::from_rgb8(100, 150, 255),
+                    color: Color::from_rgba(accent.r, accent.g, accent.b, 0.5),
                     width: 1.0,
                     radius: 4.0.into(),
                 },
                 icon: cursor_color,
                 placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                value: match self.theme {
-                    Theme::Light => Color::from_rgb8(0, 0, 0),
-                    Theme::Dark => Color::from_rgb8(255, 255, 255),
-                },
-                selection: Color::from_rgba(0.4, 0.6, 1.0, 0.5),
+                value: text_value,
+                selection: accent_glow,
             },
             text_editor::Status::Focused => text_editor::Style {
                 background: iced::Background::Color(Color::TRANSPARENT),
                 border: iced::Border {
-                    color: Color::from_rgb8(100, 150, 255),
+                    color: accent,
                     width: 2.0,
                     radius: 4.0.into(),
                 },
                 icon: cursor_color,
                 placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                value: match self.theme {
-                    Theme::Light => Color::from_rgb8(0, 0, 0),
-                    Theme::Dark => Color::from_rgb8(255, 255, 255),
-                },
-                selection: Color::from_rgba(0.4, 0.6, 1.0, 0.5),
+                value: text_value,
+                selection: accent_glow,
             },
             text_editor::Status::Disabled => text_editor::Style {
                 background: iced::Background::Color(Color::TRANSPARENT),
@@ -118,7 +118,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
                 icon: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
                 placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
                 value: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                selection: Color::from_rgba(0.4, 0.6, 1.0, 0.3),
+                selection: Color::from_rgba(accent.r, accent.g, accent.b, 0.2),
             },
         }
     }
@@ -159,6 +159,10 @@ impl std::fmt::Display for FontSize {
 pub fn main() -> iced::Result {
     let config = Config::load();
 
+    // On Windows the .ico is embedded as a Win32 resource via build.rs /
+    // winresource, so the OS picks it up automatically without any runtime
+    // call here.  On other platforms we leave the icon unset — macOS reads
+    // it from the app bundle and Linux from the XDG desktop entry.
     iced::application(APP_NAME, Cards::update, Cards::view)
         .subscription(Cards::subscription)
         .theme(Cards::theme)
@@ -274,6 +278,7 @@ struct Cards {
     icon_add: svg::Handle,
     icon_duplicate: svg::Handle,
     icon_delete: svg::Handle,
+    icon_app: svg::Handle,
     window_size: iced::Size,
     last_tick: Instant,
 }
@@ -357,6 +362,7 @@ impl Cards {
             icon_add: svg::Handle::from_memory(include_bytes!("icons/add.svg")),
             icon_duplicate: svg::Handle::from_memory(include_bytes!("icons/duplicate.svg")),
             icon_delete: svg::Handle::from_memory(include_bytes!("icons/delete.svg")),
+            icon_app: svg::Handle::from_memory(include_bytes!("icons/app.svg")),
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
         };
@@ -1690,6 +1696,7 @@ impl Cards {
         let sidebar_bg = self.theme.sidebar_background();
         let sidebar_shadow = self.theme.sidebar_shadow();
         let separator_color = self.theme.separator_color();
+        let accent_separator = self.theme.accent_glow();
         let icon_color = self.theme.icon_color();
 
         let main_content: Element<Message> = self.dot_grid.view().map(Message::DotGridMessage);
@@ -1780,7 +1787,7 @@ impl Cards {
         // Build sidebar content with title
         let btn_style = CardButtonStyle {
             background: self.theme.button_background(),
-            background_hovered: self.theme.button_background_hovered(),
+            background_hovered: self.theme.accent_bg(),
             text_color: self.theme.button_text(),
             border_color: self.theme.button_border(),
             shadow_color: self.theme.button_shadow(),
@@ -1824,13 +1831,20 @@ impl Cards {
         .class(settings_btn_style)
         .on_press(Message::ToggleSettings);
 
-        let sidebar_title = text("Cards")
-            .size(18)
-            .font(iced::Font {
-                weight: iced::font::Weight::Bold,
-                ..Default::default()
-            })
-            .color(self.theme.button_text());
+        let sidebar_title = row![
+            svg(self.icon_app.clone())
+                .width(22)
+                .height(22),
+            text("Cards")
+                .size(18)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..Default::default()
+                })
+                .color(self.theme.button_text()),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
 
         let top_row = row![
             sidebar_title,
@@ -1846,7 +1860,7 @@ impl Cards {
             .height(1)
             .style(move |_theme: &IcedTheme| {
                 iced::widget::container::Style {
-                    background: Some(iced::Background::Color(separator_color)),
+                    background: Some(iced::Background::Color(accent_separator)),
                     border: Border::default(),
                     shadow: Shadow::default(),
                     text_color: None,
@@ -1858,7 +1872,7 @@ impl Cards {
             .height(1)
             .style(move |_theme: &IcedTheme| {
                 iced::widget::container::Style {
-                    background: Some(iced::Background::Color(separator_color)),
+                    background: Some(iced::Background::Color(accent_separator)),
                     border: Border::default(),
                     shadow: Shadow::default(),
                     text_color: None,
@@ -1905,7 +1919,7 @@ impl Cards {
         if self.config.general.new_board_button_at_top && !skip_button_in_list {
             let add_board_btn_style = CardButtonStyle {
                 background: Color::TRANSPARENT,
-                background_hovered: self.theme.button_background_hovered(),
+                background_hovered: self.theme.accent_bg(),
                 text_color: self.theme.button_text(),
                 border_color: Color::TRANSPARENT,
                 shadow_color: Color::TRANSPARENT,
@@ -1942,16 +1956,16 @@ impl Cards {
 
             let board_btn_style = if is_active {
                 CardButtonStyle {
-                    background: self.theme.button_background_hovered(),
-                    background_hovered: self.theme.button_background_hovered(),
+                    background: self.theme.accent_bg(),
+                    background_hovered: self.theme.accent_bg(),
                     text_color: self.theme.button_text(),
-                    border_color: self.theme.button_border(),
+                    border_color: self.theme.accent(),
                     shadow_color: Color::TRANSPARENT,
                 }
             } else {
                 CardButtonStyle {
                     background: Color::TRANSPARENT,
-                    background_hovered: self.theme.button_background_hovered(),
+                    background_hovered: self.theme.accent_bg(),
                     text_color: self.theme.button_text(),
                     border_color: Color::TRANSPARENT,
                     shadow_color: Color::TRANSPARENT,
@@ -1960,7 +1974,7 @@ impl Cards {
 
             let delete_btn_style = CardButtonStyle {
                 background: Color::TRANSPARENT,
-                background_hovered: self.theme.button_background_hovered(),
+                background_hovered: self.theme.accent_bg(),
                 text_color: self.theme.button_text(),
                 border_color: Color::TRANSPARENT,
                 shadow_color: Color::TRANSPARENT,
@@ -2136,7 +2150,7 @@ impl Cards {
         if !self.config.general.new_board_button_at_top && !skip_button_in_list {
             let add_board_btn_style = CardButtonStyle {
                 background: Color::TRANSPARENT,
-                background_hovered: self.theme.button_background_hovered(),
+                background_hovered: self.theme.accent_bg(),
                 text_color: self.theme.button_text(),
                 border_color: Color::TRANSPARENT,
                 shadow_color: Color::TRANSPARENT,
@@ -2226,11 +2240,11 @@ impl Cards {
             println!("DEBUG: Stacked button Y: {:.1} (start: {:.1}, end: {:.1})", current_y, start_y, end_y);
 
             let add_board_btn_style = CardButtonStyle {
-                background: self.theme.button_background_hovered(),
-                background_hovered: self.theme.button_background_hovered(),
+                background: self.theme.accent_bg(),
+                background_hovered: self.theme.accent_bg(),
                 text_color: self.theme.button_text(),
                 border_color: self.theme.button_border(),
-                shadow_color: self.theme.button_shadow(),
+                shadow_color: Color::TRANSPARENT,
             };
 
             let animated_button_overlay = container(
@@ -2325,6 +2339,7 @@ impl Cards {
             sidebar_content,
             SIDEBAR_WIDTH,
             sidebar_bg,
+            self.theme.accent_bg(),
             sidebar_shadow,
             self.sidebar_offset,
         )
@@ -2358,6 +2373,7 @@ impl Cards {
             let settings_modal: Element<Message> = SettingsModal::new(
                 settings_content,
                 sidebar_bg,
+                self.theme.accent_bg(),
                 sidebar_shadow,
             )
             .width(700.0)
@@ -2604,7 +2620,7 @@ impl Cards {
 
         let add_card_btn_style = CardButtonStyle {
             background: Color::TRANSPARENT,
-            background_hovered: self.theme.button_background_hovered(),
+            background_hovered: self.theme.accent_bg(),
             text_color: self.theme.button_text(),
             border_color: Color::TRANSPARENT,
             shadow_color: Color::TRANSPARENT,
@@ -2651,7 +2667,7 @@ impl Cards {
     fn build_card_icon_menu(&self) -> Element<Message> {
         let bg_color = self.theme.sidebar_background();
         let separator_color = self.theme.icon_color().scale_alpha(0.2);
-        let scrollbar_color = self.theme.icon_color().scale_alpha(0.3);
+        let scrollbar_color = self.theme.accent();
 
         // Get the current card's color
         let card_color = if let Some(card_id) = self.card_icon_menu_card_id {
@@ -2662,7 +2678,7 @@ impl Cards {
 
         let icon_btn_style = CardButtonStyle {
             background: Color::TRANSPARENT,
-            background_hovered: self.theme.button_background_hovered(),
+            background_hovered: self.theme.accent_bg(),
             text_color: self.theme.button_text(),
             border_color: Color::TRANSPARENT,
             shadow_color: Color::TRANSPARENT,
@@ -2846,7 +2862,7 @@ impl Cards {
     fn build_card_toolbar(&self, card_id: usize) -> Element<Message> {
         let btn_style = CardButtonStyle {
             background: Color::TRANSPARENT,
-            background_hovered: self.theme.button_background_hovered(),
+            background_hovered: self.theme.accent_bg(),
             text_color: self.theme.button_text(),
             border_color: Color::TRANSPARENT,
             shadow_color: Color::TRANSPARENT,
@@ -3027,7 +3043,7 @@ impl Cards {
 
         let close_btn_style = CardButtonStyle {
             background: self.theme.button_background(),
-            background_hovered: self.theme.button_background_hovered(),
+            background_hovered: self.theme.accent_bg(),
             text_color: self.theme.button_text(),
             border_color: self.theme.button_border(),
             shadow_color: self.theme.button_shadow(),
@@ -3085,16 +3101,16 @@ impl Cards {
 
             let cat_btn_style = if is_selected {
                 CardButtonStyle {
-                    background: self.theme.button_background_hovered(),
-                    background_hovered: self.theme.button_background_hovered(),
+                    background: self.theme.accent_bg(),
+                    background_hovered: self.theme.accent_bg(),
                     text_color: self.theme.button_text(),
-                    border_color: self.theme.button_border(),
+                    border_color: self.theme.accent(),
                     shadow_color: Color::TRANSPARENT,
                 }
             } else {
                 CardButtonStyle {
                     background: Color::TRANSPARENT,
-                    background_hovered: self.theme.button_background_hovered(),
+                    background_hovered: self.theme.accent_bg(),
                     text_color: self.theme.button_text(),
                     border_color: Color::TRANSPARENT,
                     shadow_color: Color::TRANSPARENT,
@@ -3260,34 +3276,34 @@ impl Cards {
 
                 let light_btn_style = CardButtonStyle {
                     background: if matches!(self.theme, Theme::Light) {
-                        self.theme.button_background_hovered()
+                        self.theme.accent_bg()
                     } else {
                         Color::TRANSPARENT
                     },
-                    background_hovered: self.theme.button_background_hovered(),
+                    background_hovered: self.theme.accent_bg(),
                     text_color: self.theme.button_text(),
-                    border_color: self.theme.button_border(),
-                    shadow_color: if matches!(self.theme, Theme::Light) {
-                        self.theme.button_shadow()
+                    border_color: if matches!(self.theme, Theme::Light) {
+                        self.theme.accent()
                     } else {
-                        Color::TRANSPARENT
+                        self.theme.button_border()
                     },
+                    shadow_color: Color::TRANSPARENT,
                 };
 
                 let dark_btn_style = CardButtonStyle {
                     background: if matches!(self.theme, Theme::Dark) {
-                        self.theme.button_background_hovered()
+                        self.theme.accent_bg()
                     } else {
                         Color::TRANSPARENT
                     },
-                    background_hovered: self.theme.button_background_hovered(),
+                    background_hovered: self.theme.accent_bg(),
                     text_color: self.theme.button_text(),
-                    border_color: self.theme.button_border(),
-                    shadow_color: if matches!(self.theme, Theme::Dark) {
-                        self.theme.button_shadow()
+                    border_color: if matches!(self.theme, Theme::Dark) {
+                        self.theme.accent()
                     } else {
-                        Color::TRANSPARENT
+                        self.theme.button_border()
                     },
+                    shadow_color: Color::TRANSPARENT,
                 };
 
                 let light_button = button(
@@ -3318,16 +3334,22 @@ impl Cards {
                 let font_family_label = text("Font Family").size(14);
 
                 let theme = self.theme;
-                let pick_list_style = move |_theme: &IcedTheme, _status: pick_list::Status| {
+                let pick_list_style = move |_theme: &IcedTheme, status: pick_list::Status| {
                     let background = theme.card_background();
                     let text_color = theme.card_text();
-                    let border_color = theme.button_border();
+                    let border_color = match status {
+                        pick_list::Status::Opened => theme.accent(),
+                        _ => theme.button_border(),
+                    };
 
                     pick_list::Style {
                         background: iced::Background::Color(background),
                         text_color,
                         placeholder_color: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                        handle_color: text_color,
+                        handle_color: match status {
+                            pick_list::Status::Opened => theme.accent(),
+                            _ => text_color,
+                        },
                         border: Border {
                             color: border_color,
                             width: 1.0,
@@ -3339,14 +3361,13 @@ impl Cards {
                 let menu_style = move |_theme: &IcedTheme| {
                     let background = theme.card_background();
                     let text_color = theme.card_text();
-                    let border_color = theme.button_border();
-                    let selected_bg = theme.button_background_hovered();
+                    let border_color = theme.accent();
 
                     iced::overlay::menu::Style {
                         background: iced::Background::Color(background),
                         text_color,
-                        selected_background: iced::Background::Color(selected_bg),
-                        selected_text_color: text_color,
+                        selected_background: iced::Background::Color(theme.accent_bg()),
+                        selected_text_color: theme.accent(),
                         border: Border {
                             color: border_color,
                             width: 1.0,
@@ -3373,16 +3394,22 @@ impl Cards {
                     .find(|s| (s.0 - self.config.appearance.font.size).abs() < 0.1)
                     .copied();
 
-                let pick_list_style2 = move |_theme: &IcedTheme, _status: pick_list::Status| {
+                let pick_list_style2 = move |_theme: &IcedTheme, status: pick_list::Status| {
                     let background = theme.card_background();
                     let text_color = theme.card_text();
-                    let border_color = theme.button_border();
+                    let border_color = match status {
+                        pick_list::Status::Opened => theme.accent(),
+                        _ => theme.button_border(),
+                    };
 
                     pick_list::Style {
                         background: iced::Background::Color(background),
                         text_color,
                         placeholder_color: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                        handle_color: text_color,
+                        handle_color: match status {
+                            pick_list::Status::Opened => theme.accent(),
+                            _ => text_color,
+                        },
                         border: Border {
                             color: border_color,
                             width: 1.0,
@@ -3394,14 +3421,13 @@ impl Cards {
                 let menu_style2 = move |_theme: &IcedTheme| {
                     let background = theme.card_background();
                     let text_color = theme.card_text();
-                    let border_color = theme.button_border();
-                    let selected_bg = theme.button_background_hovered();
+                    let border_color = theme.accent();
 
                     iced::overlay::menu::Style {
                         background: iced::Background::Color(background),
                         text_color,
-                        selected_background: iced::Background::Color(selected_bg),
-                        selected_text_color: text_color,
+                        selected_background: iced::Background::Color(theme.accent_bg()),
+                        selected_text_color: theme.accent(),
                         border: Border {
                             color: border_color,
                             width: 1.0,
@@ -3529,18 +3555,18 @@ impl Cards {
     fn build_toggle_button(&self, is_on: bool, message: Message) -> Element<Message> {
         let btn_style = CardButtonStyle {
             background: if is_on {
-                self.theme.button_background_hovered()
+                self.theme.accent_bg()
             } else {
                 Color::TRANSPARENT
             },
-            background_hovered: self.theme.button_background_hovered(),
+            background_hovered: self.theme.accent_bg(),
             text_color: self.theme.button_text(),
-            border_color: self.theme.button_border(),
-            shadow_color: if is_on {
-                self.theme.button_shadow()
+            border_color: if is_on {
+                self.theme.accent()
             } else {
-                Color::TRANSPARENT
+                self.theme.button_border()
             },
+            shadow_color: Color::TRANSPARENT,
         };
 
         button(

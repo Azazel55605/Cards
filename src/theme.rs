@@ -107,6 +107,23 @@ impl Theme {
         }
     }
 
+    // Accent colors — same for both themes (purple brand color)
+    pub fn accent(&self) -> Color {
+        Color::from_rgb8(124, 92, 252)
+    }
+
+    pub fn accent_dim(&self) -> Color {
+        Color::from_rgb8(91, 63, 212)
+    }
+
+    pub fn accent_glow(&self) -> Color {
+        Color::from_rgba8(124, 92, 252, 0.22)
+    }
+
+    pub fn accent_bg(&self) -> Color {
+        Color::from_rgba8(124, 92, 252, 0.08)
+    }
+
     pub fn toggle(&self) -> Self {
         match self {
             Theme::Light => Theme::Dark,

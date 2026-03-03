@@ -486,14 +486,8 @@ impl DotGrid {
                     Color::BLACK
                 };
                 
-                // Selection color based on theme
-                let selection_color = if self.card_text.r > 0.5 {
-                    // Dark mode - use light grey/white with transparency
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.3)
-                } else {
-                    // Light mode - use dark grey with transparency
-                    Color::from_rgba(0.5, 0.5, 0.5, 0.3)
-                };
+                // Selection color — accent glow (rgba 124,92,252, 0.22)
+                let selection_color = Color::from_rgba8(124, 92, 252, 0.22);
 
                 card.content.render(
                     frame,

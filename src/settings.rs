@@ -2,8 +2,9 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
+use iced::gradient;
 use iced::mouse;
-use iced::{Border, Color, Element, Event, Length, Rectangle, Shadow, Size, Vector};
+use iced::{Border, Color, Element, Event, Length, Radians, Rectangle, Shadow, Size, Vector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsCategory {
@@ -42,6 +43,7 @@ where
     width: f32,
     height: f32,
     background: Color,
+    accent: Color,
     border_radius: f32,
     shadow_color: Color,
     overlay_color: Color,
@@ -56,6 +58,7 @@ where
     pub fn new(
         content: impl Into<Element<'a, Message, iced::Theme, Renderer>>,
         background: Color,
+        accent: Color,
         shadow_color: Color,
     ) -> Self {
         Self {
@@ -63,6 +66,7 @@ where
             width: 600.0,
             height: 400.0,
             background,
+            accent,
             border_radius: 12.0,
             shadow_color,
             overlay_color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
@@ -176,7 +180,18 @@ where
                 animated_overlay_color,
             );
 
-            // Draw modal background with shadow
+            // Draw modal background with shadow and diagonal gradient
+            let blended = Color {
+                r: self.background.r * (1.0 - self.accent.a) + self.accent.r * self.accent.a,
+                g: self.background.g * (1.0 - self.accent.a) + self.accent.g * self.accent.a,
+                b: self.background.b * (1.0 - self.accent.a) + self.accent.b * self.accent.a,
+                a: 1.0,
+            };
+            // Diagonal gradient: 135° = top-left → bottom-right
+            let gradient = gradient::Linear::new(Radians(std::f32::consts::PI * 0.75))
+                .add_stop(0.0, self.background)
+                .add_stop(1.0, blended);
+
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: modal_bounds,
@@ -191,7 +206,7 @@ where
                         blur_radius: 24.0 * self.scale,
                     },
                 },
-                self.background,
+                iced::Background::Gradient(iced::Gradient::Linear(gradient)),
             );
 
             // Translate cursor for content
