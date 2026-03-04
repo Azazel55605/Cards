@@ -46,6 +46,9 @@ pub struct GeneralConfig {
 
     #[serde(default = "default_false")]
     pub debug_mode: bool,
+
+    #[serde(default = "default_true")]
+    pub confirm_card_delete: bool,
 }
 
 fn default_false() -> bool {
@@ -212,6 +215,7 @@ impl Default for GeneralConfig {
             enable_animations: default_true(),
             new_board_button_at_top: default_false(),
             debug_mode: default_false(),
+            confirm_card_delete: default_true(),
         }
     }
 }
@@ -393,6 +397,11 @@ impl Config {
 
     pub fn set_debug_mode(&mut self, enabled: bool) -> Result<(), ConfigError> {
         self.general.debug_mode = enabled;
+        self.save()
+    }
+
+    pub fn set_confirm_card_delete(&mut self, enabled: bool) -> Result<(), ConfigError> {
+        self.general.confirm_card_delete = enabled;
         self.save()
     }
 

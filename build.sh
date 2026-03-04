@@ -17,4 +17,4 @@ echo "==> macOS ARM64"
 cargo build --release --target aarch64-apple-darwin
 
 echo ""
-echo "Done!
+echo "Done!"

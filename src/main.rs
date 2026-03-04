@@ -126,7 +126,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 }
 
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.1.0";
+const APP_VERSION: &str = "0.1.4";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
@@ -222,6 +222,11 @@ pub enum Message {
     // Settings messages
     SetNewBoardButtonAtTop(bool),
     SetDebugMode(bool),
+    SetConfirmCardDelete(bool),
+    // Confirmation dialog messages
+    ShowDeleteConfirmDialog(usize),
+    ConfirmDeleteCard,
+    CancelDeleteCard,
 }
 
 struct Cards {
@@ -272,6 +277,8 @@ struct Cards {
     config: Config,
     // Active accent color (resolved from config)
     accent_color: Color,
+    // Pending card deletion confirmation
+    confirm_delete_card_id: Option<usize>,
     // Cache SVG handles
     icon_menu_left: svg::Handle,
     icon_menu_right: svg::Handle,
@@ -360,6 +367,7 @@ impl Cards {
             animating_board_index: None,
             config,
             accent_color,
+            confirm_delete_card_id: None,
             icon_menu_left: svg::Handle::from_memory(include_bytes!("icons/menu-left.svg")),
             icon_menu_right: svg::Handle::from_memory(include_bytes!("icons/menu-right.svg")),
             icon_moon: svg::Handle::from_memory(include_bytes!("icons/moon.svg")),
@@ -1066,9 +1074,41 @@ impl Cards {
                         return Task::none();
                     }
 
+                    // Global shortcuts when NOT editing a card
+                    if self.editing_card_id.is_none() {
+                        // Ctrl+A: Add a new card at the center of the viewport
+                        if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "a") {
+                            // Place card near center of canvas view
+                            let center_x = (self.window_size.width / 2.0) - self.canvas_offset.x - (SIDEBAR_WIDTH / 2.0);
+                            let center_y = (self.window_size.height / 2.0) - self.canvas_offset.y;
+                            let pos = Point::new(center_x, center_y);
+                            let card_id = self.dot_grid.add_card(pos);
+                            // Auto-select and start editing
+                            self.selected_card_id = Some(card_id);
+                            self.editing_card_id = Some(card_id);
+                            if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                card.is_editing = true;
+                                card.content.move_cursor_to_end();
+                            }
+                            self.dot_grid.clear_cards_cache();
+                            return Task::none();
+                        }
+
+                        // Escape while confirm dialog is open -> cancel deletion
+                        if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
+                            if self.confirm_delete_card_id.is_some() {
+                                self.confirm_delete_card_id = None;
+                                return Task::none();
+                            }
+                        }
+                    }
+
                     if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
                         // Close menus/settings/editing - but never quit the app
-                        if self.editing_board_index.is_some() {
+                        if self.confirm_delete_card_id.is_some() {
+                            self.confirm_delete_card_id = None;
+                            return Task::none();
+                        } else if self.editing_board_index.is_some() {
                             // Cancel board rename
                             self.editing_board_index = None;
                             self.board_rename_value.clear();
@@ -1436,15 +1476,18 @@ impl Cards {
                 }
             }
             Message::DeleteCard(card_id) => {
-                // Remove the card using DotGrid's method
-                self.dot_grid.delete_card(card_id);
-
-                // Clear selection if this was the selected card
-                if self.selected_card_id == Some(card_id) {
-                    self.selected_card_id = None;
-                }
-                if self.editing_card_id == Some(card_id) {
-                    self.editing_card_id = None;
+                if self.config.general.confirm_card_delete {
+                    // Show confirmation dialog
+                    self.confirm_delete_card_id = Some(card_id);
+                } else {
+                    // Delete immediately
+                    self.dot_grid.delete_card(card_id);
+                    if self.selected_card_id == Some(card_id) {
+                        self.selected_card_id = None;
+                    }
+                    if self.editing_card_id == Some(card_id) {
+                        self.editing_card_id = None;
+                    }
                 }
             }
             Message::AddNewBoard => {
@@ -1572,6 +1615,28 @@ impl Cards {
                 }
                 // Update DotGrid debug mode
                 self.dot_grid.set_debug_mode(enabled);
+            }
+            Message::SetConfirmCardDelete(enabled) => {
+                if let Err(e) = self.config.set_confirm_card_delete(enabled) {
+                    eprintln!("Failed to save confirm card delete setting: {}", e);
+                }
+            }
+            Message::ShowDeleteConfirmDialog(card_id) => {
+                self.confirm_delete_card_id = Some(card_id);
+            }
+            Message::ConfirmDeleteCard => {
+                if let Some(card_id) = self.confirm_delete_card_id.take() {
+                    self.dot_grid.delete_card(card_id);
+                    if self.selected_card_id == Some(card_id) {
+                        self.selected_card_id = None;
+                    }
+                    if self.editing_card_id == Some(card_id) {
+                        self.editing_card_id = None;
+                    }
+                }
+            }
+            Message::CancelDeleteCard => {
+                self.confirm_delete_card_id = None;
             }
         }
         Task::none()
@@ -2366,6 +2431,12 @@ impl Cards {
         // IMPORTANT: Add sidebar overlay LAST (except settings) to ensure it renders on top of all card elements
         // The order is: base canvas -> context menu -> card menu -> toolbar -> SIDEBAR -> settings
         view = Overlay::new(view, sidebar).into();
+
+        // Add delete confirmation dialog (on top of sidebar, below settings)
+        if self.confirm_delete_card_id.is_some() {
+            let confirm_dialog = self.build_delete_confirm_dialog();
+            view = Overlay::new(view, confirm_dialog).into();
+        }
 
         // Add settings modal LAST (on top of everything)
         if self.settings_open || self.settings_animating {
@@ -3251,6 +3322,12 @@ impl Cards {
                     Message::SetNewBoardButtonAtTop(!self.config.general.new_board_button_at_top),
                 );
 
+                let confirm_delete_label = text("Confirm card deletion").size(14);
+                let confirm_delete_toggle = self.build_toggle_button(
+                    self.config.general.confirm_card_delete,
+                    Message::SetConfirmCardDelete(!self.config.general.confirm_card_delete),
+                );
+
                 column![
                     text("General Settings").size(16).font(iced::Font {
                         weight: iced::font::Weight::Bold,
@@ -3277,6 +3354,22 @@ impl Cards {
                         board_btn_toggle,
                     ]
                     .align_y(Alignment::Center),
+                    Space::with_height(15),
+                    row![
+                        confirm_delete_label,
+                        Space::with_width(Length::Fill),
+                        confirm_delete_toggle,
+                    ]
+                    .align_y(Alignment::Center),
+                    Space::with_height(5),
+                    text("Show a confirmation dialog before deleting cards")
+                        .size(12)
+                        .color(Color::from_rgba(
+                            self.theme.button_text().r,
+                            self.theme.button_text().g,
+                            self.theme.button_text().b,
+                            0.6,
+                        )),
                 ]
                 .spacing(10)
                 .into()
@@ -3599,5 +3692,101 @@ impl Cards {
         .class(btn_style)
         .on_press(message)
         .into()
+    }
+
+    fn build_delete_confirm_dialog(&self) -> Element<Message> {
+        let bg_color = self.theme.sidebar_background();
+        let text_color = self.theme.button_text();
+        let accent = self.accent_color;
+        let accent_bg = self.theme.accent_bg_from(accent);
+        let shadow_color = self.theme.sidebar_shadow();
+        let border_color = self.theme.button_border();
+
+        let cancel_btn_style = CardButtonStyle {
+            background: Color::TRANSPARENT,
+            background_hovered: accent_bg,
+            text_color,
+            border_color,
+            shadow_color: Color::TRANSPARENT,
+        };
+
+        let delete_btn_style = CardButtonStyle {
+            background: Color::from_rgb(0.75, 0.18, 0.18),
+            background_hovered: Color::from_rgb(0.9, 0.2, 0.2),
+            text_color: Color::WHITE,
+            border_color: Color::TRANSPARENT,
+            shadow_color: Color::TRANSPARENT,
+        };
+
+        let cancel_button = button(
+            container(text("Cancel").size(14))
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .width(Length::Fill)
+                .height(Length::Fill)
+        )
+        .width(90)
+        .height(34)
+        .class(cancel_btn_style)
+        .on_press(Message::CancelDeleteCard);
+
+        let delete_button = button(
+            container(text("Delete").size(14))
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+                .width(Length::Fill)
+                .height(Length::Fill)
+        )
+        .width(90)
+        .height(34)
+        .class(delete_btn_style)
+        .on_press(Message::ConfirmDeleteCard);
+
+        let dialog_content = container(
+            column![
+                text("Delete Card")
+                    .size(16)
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..Default::default()
+                    })
+                    .color(text_color),
+                Space::with_height(8),
+                text("Are you sure you want to delete this card?")
+                    .size(14)
+                    .color(text_color),
+                text("This action cannot be undone.")
+                    .size(13)
+                    .color(Color::from_rgba(text_color.r, text_color.g, text_color.b, 0.65)),
+                Space::with_height(16),
+                row![
+                    Space::with_width(Length::Fill),
+                    cancel_button,
+                    Space::with_width(8),
+                    delete_button,
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .padding(20)
+            .width(Length::Fill)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        // Use SettingsModal to get the dimmed overlay and centered positioning behavior.
+        // SettingsModal already draws its own gradient background — do NOT add a background
+        // to dialog_content or there will be two overlapping bodies.
+        let modal_content: Element<Message> = SettingsModal::new(
+            dialog_content,
+            bg_color,
+            accent_bg,
+            shadow_color,
+        )
+        .width(340.0)
+        .height(160.0)
+        .on_close(|| Message::CancelDeleteCard)
+        .into();
+
+        modal_content
     }
 }
