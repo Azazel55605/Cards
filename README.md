@@ -9,28 +9,24 @@ A beautiful, fast, and minimal note-taking application built with Rust and [Iced
 
 ## ✨ Overview
 
-Cards is a modern, infinite canvas note-taking application that lets you organize your thoughts spatially. Create, arrange, and connect your ideas with beautiful cards on an interactive dot grid background.
+Cards is a modern, infinite-canvas note-taking application that lets you organise your thoughts spatially. Create, arrange, and connect ideas with beautiful cards on an interactive dot-grid background.
 
 ### Key Features
 
-- 🎨 **Infinite Canvas** - Unlimited space to organize your notes
-- 📋 **Multiple Boards** - Organize cards across separate workspaces with independent grids
-- 📝 **Markdown Support** - Full markdown rendering with syntax highlighting for code blocks
-- 🎯 **Smart Card System** - Resizable, color-coded cards with custom icons
-- ⚡ **Lightning Fast** - Built with Rust for maximum performance
-- 🌓 **Dark/Light Themes** - Beautiful themes that adapt to your preference
-- 🎨 **Customizable Cards** - Choose from 80+ Bootstrap icons and multiple colors
-- 🔤 **Rich Text Editing** - Full markdown support including:
-  - Headers (H1-H6)
-  - **Bold**, *italic*, and ~~strikethrough~~
-  - Code blocks with syntax highlighting (40+ languages)
-  - Bulleted lists
-  - Interactive checkboxes `[ ]` and `[x]`
-  - Inline code
-- 💾 **Auto-Save** - Your work is automatically saved per board
-- 🎯 **Smooth Animations** - Fluid card movements, board transitions, and interactions
-- ⌨️ **Keyboard-First** - Comprehensive keyboard shortcuts for everything
-- 🎨 **Custom Text Editor** - Monospace font support with proper cursor tracking
+- 🎨 **Infinite Canvas** — Unlimited space across a smooth dot grid
+- 📋 **Multiple Boards** — Separate canvases per board with independent cards; switch instantly
+- 📝 **Markdown Support** — Full markdown rendering inside `<md>` tags with 40+ language syntax highlighting
+- 🎯 **Smart Cards** — Resizable, colour-coded cards with 80+ Bootstrap icons
+- ⚡ **Fast & Native** — Built entirely in Rust for maximum responsiveness
+- 🌓 **Dark / Light Theme** — Smooth animated diagonal-wipe transition between themes
+- 🎨 **Accent Colours** — Choose your accent colour; applied to borders, highlights, gradients, and the sidebar
+- 🔤 **Rich Text Editor** — Custom monospace editor with cursor, selection, word navigation, and system clipboard
+- 🔲 **Interactive Checkboxes** — Click to toggle checkboxes directly in the rendered card view
+- 💾 **Per-Board Auto-Save** — Cards saved per board automatically
+- 🎬 **Smooth Animations** — Card move/resize, board transitions, settings open/close, theme wipe
+- ⌨️ **Keyboard-First** — Full shortcut reference available in-app under Settings → Shortcuts
+- 🛠️ **Self-Healing Config** — Missing or obsolete config keys are fixed automatically on startup
+- ✅ **Delete Confirmation** — Optional confirmation dialog before deleting a card (toggleable in settings)
 
 ## 🖼️ Screenshots
 
@@ -50,274 +46,270 @@ Cards is a modern, infinite canvas note-taking application that lets you organiz
 git clone https://github.com/yourusername/Cards.git
 cd Cards
 
-# Build the release version
-cargo build --release
-
-# Run the application
+# Build and run
 cargo run --release
 ```
 
+---
+
 ## ⌨️ Keyboard Shortcuts
 
-### Global Shortcuts
+### Canvas
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl + A` | Select all text |
-| `Ctrl + C` | Copy selected text |
-| `Ctrl + X` | Cut selected text |
-| `Ctrl + V` | Paste text |
-| `Ctrl + 0` | Recenter canvas to origin |
+| `Ctrl + 0` | Recenter canvas to origin (animated) |
+| `Middle Mouse` | Pan canvas |
+| `Scroll` | Pan canvas vertically / horizontally |
+| `Click + Drag` | Pan canvas (on empty space) |
+
+### Boards
+
+| Shortcut | Action |
+|----------|--------|
 | `Ctrl + Tab` | Switch to next board |
 | `Ctrl + Shift + Tab` | Switch to previous board |
-| `Middle Mouse Button` | Recenter canvas (animated) |
-| `Esc` | Exit editing mode / Close menus |
+| `Double-click board` | Rename board inline |
 
-### Text Editing
+### Cards
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl + A` | Add new card at canvas centre (auto-focuses) |
+| `Right-click canvas` | Context menu → Add Card |
+| `Click` | Select card |
+| `Double-click` | Start editing card |
+| `Drag header` | Move card |
+| `Drag ↘ handle` | Resize card |
+| `Esc` | Stop editing / deselect |
+
+### Text Editing *(inside a card)*
 
 | Shortcut | Action |
 |----------|--------|
 | `Tab` | Insert 4 spaces |
-| `Enter` | New line (or auto-complete markdown tags) |
+| `Enter` | New line |
 | `Backspace` | Delete previous character |
 | `Ctrl + Backspace` | Delete previous word |
 | `Delete` | Delete next character |
 | `Ctrl + Delete` | Delete next word |
 
-### Navigation
+### Cursor Navigation *(inside a card)*
 
 | Shortcut | Action |
 |----------|--------|
 | `Arrow Keys` | Move cursor |
-| `Ctrl + Arrow Left/Right` | Jump to previous/next word |
+| `Ctrl + ← / →` | Jump to previous / next word |
 | `Home` | Move to start of line |
 | `End` | Move to end of line |
-| `Ctrl + Home` | Move to start of document |
-| `Ctrl + End` | Move to end of document |
 
-### Text Selection
+### Text Selection *(inside a card)*
 
 | Shortcut | Action |
 |----------|--------|
-| `Shift + Arrow Keys` | Select text |
-| `Shift + Ctrl + Arrow Left/Right` | Select word by word |
+| `Shift + Arrows` | Extend selection |
+| `Shift + Ctrl + ← / →` | Extend selection word by word |
+| `Click + Drag` | Select text with mouse |
+| `Ctrl + A` | Select all text |
+
+### Clipboard *(inside a card)*
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl + C` | Copy selected text |
+| `Ctrl + X` | Cut selected text |
+| `Ctrl + V` | Paste from system clipboard |
+
+### Toolbar *(card selected)*
+
+| Button | Markdown | Description |
+|--------|----------|-------------|
+| `#` | `# Text` | Heading prefix |
+| `B` | `**Text**` | Bold (wraps selection) |
+| `I` | `*Text*` | Italic (wraps selection) |
+| `S` | `~~Text~~` | Strikethrough (wraps selection) |
+| `` ` `` | `` `Code` `` | Inline code (wraps selection) |
+| `</>` | ```` ```Code``` ```` | Code block (wraps selection) |
+| `•` | `- Item` | Bullet point |
+| Duplicate | — | Duplicate card (inherits size) |
+| Delete | — | Delete card (confirmation dialog if enabled) |
+
+### App
+
+| Shortcut | Action |
+|----------|--------|
+| `Esc` | Close menus / dialogs / settings |
+
+> All shortcuts are also listed inside the app under **Settings → Shortcuts**.
+
+---
 
 ## 📖 How to Use
 
 ### Managing Boards
 
-Boards allow you to organize cards into separate workspaces, each with its own independent infinite canvas.
+Boards give you separate infinite canvases — great for different projects or contexts.
 
 #### Creating Boards
+Click the **+** board button at the top of the sidebar.
 
-1. Look at the **sidebar** (left side)
-2. Click **"+ Add New Board"** button
-3. A new board is created with a default name (Board 2, Board 3, etc.)
-4. The button can be positioned at the top or bottom (toggle in Settings)
-
-#### Switching Between Boards
-
-- **Click** on a board name in the sidebar to switch
-- **Keyboard**: Press `Ctrl + Tab` to cycle forward through boards
-- **Keyboard**: Press `Ctrl + Shift + Tab` to cycle backward through boards
-- Each board maintains its own cards independently
+#### Switching Boards
+- **Click** a board name in the sidebar, or use `Ctrl + Tab` / `Ctrl + Shift + Tab`
+- Each board's cards are saved and restored independently
 
 #### Renaming Boards
-
-1. **Click twice** on a board name (or click once on the active board)
-2. A text input will appear
-3. Type the new name
-4. Press `Enter` to save or `Esc` to cancel
-5. Click outside the input to save automatically
+**Double-click** a board name to edit it inline. Press `Enter` to confirm or `Esc` to cancel.
 
 #### Deleting Boards
+**Hover** over a board — a red delete button appears on the right. Click it to remove the board.  
+You cannot delete the last remaining board.
 
-1. **Hover** over a board in the sidebar
-2. A **red delete button** (🗑️) appears on the right
-3. **Click** the delete button
-4. The board and all its cards are removed (with smooth animation)
-5. Note: You cannot delete the last remaining board
+---
 
 ### Creating Cards
 
-1. **Right-click** anywhere on the canvas to open the context menu
-2. Click **"Add Card"** to create a new card at that position
-3. The card will appear and automatically enter edit mode
+- **Right-click** empty canvas space → **Add Card**
+- **`Ctrl + A`** — creates a card at the viewport centre and immediately starts editing
 
 ### Editing Cards
 
-1. **Click once** on a card to select it
-2. **Double-click** on a card to start editing
-3. Type your content directly
-4. Click outside the card or press `Esc` to finish editing
+1. **Double-click** a card to start editing
+2. Type your content (plain text or markdown inside `<md>` tags)
+3. Click outside or press `Esc` to stop editing and render the card
 
 ### Using Markdown
 
-Cards supports rich markdown formatting. To use markdown features:
-
-1. Wrap your markdown content in `<md>` tags
-2. The app will auto-complete when you type `<md>` + `>`
-3. Write your markdown between the tags
-
-**Example:**
+Wrap content in `<md>` … `</md>` to enable markdown rendering:
 
 ```
-<md>
-# This is a heading
+Some plain text above.
 
-This is **bold** and this is *italic*.
+<md>
+# Heading
+
+**Bold**, *italic*, ~~strikethrough~~, `inline code`
 
 ```python
 def hello():
-    print("Code with syntax highlighting!")
+    print("Syntax highlighted!")
 ```
 
-- Bullet point
-- [x] Checked item
-- [ ] Unchecked item
+- Bullet item
+- [x] Done
+- [ ] To-do
 </md>
 ```
 
-### Customizing Cards
+**Auto-complete:** Type `<md>` followed by `>` — the closing tag and an empty line are inserted automatically with the cursor positioned inside.
 
-1. **Select a card** by clicking on it
-2. Click the **colored circle** in the top-left of the card
-3. Choose from:
-   - **80+ Bootstrap icons** - Organized in a scrollable grid (6 per row)
-   - **Multiple colors** - For visual categorization
-4. The selected icon and color are immediately applied
+### Customising Cards
 
-### Interactive Checkboxes
-
-Checkboxes in markdown are fully interactive:
-
-1. Write checkboxes in markdown: `- [ ]` or `- [x]`
-2. **Click** on the checkbox in the rendered view to toggle it
-3. The checkbox state updates in real-time
-4. Works seamlessly with markdown rendering
-
-### Using the Toolbar
-
-When a card is selected, a toolbar appears above it with formatting options:
-
-| Button | Markdown | Description |
-|--------|----------|-------------|
-| `#` | `# Text` | Convert to heading |
-| `B` | `**Text**` | Bold text (wraps selection) |
-| `I` | `*Text*` | Italic text (wraps selection) |
-| `S` | `~~Text~~` | Strikethrough (wraps selection) |
-| `` ` `` | `` `Code` `` | Inline code (wraps selection) |
-| `</>` | ` ```Code``` ` | Code block (wraps selection) |
-| `•` | `- Item` | Bullet point |
-| 📋 | - | Duplicate card (creates copy at offset) |
-| 🗑️ | - | Delete card (removes from canvas) |
+1. **Select** a card (single click)
+2. Click the **coloured circle** in the card's top-left to open the icon/colour picker:
+   - **80+ Bootstrap icons** in a scrollable 6-per-row grid, tinted in the card's colour
+   - **10 accent colours** as colour circles
 
 ### Resizing Cards
 
-1. **Hover over** or **select** a card
-2. A **resize handle** (↘) appears in the bottom-right corner
-3. **Click and drag** the handle to resize the card
-4. Cards have a **minimum size** (200x150) and can grow infinitely
-5. Resizing is **grid-snapped** for perfect alignment
-6. **Smooth animation** transitions the card to its new size
-7. Mouse cursor changes to resize indicator when hovering the handle
+Hover over or select a card — a **↘ handle** appears in the bottom-right corner. Drag it to resize. Cards snap to the dot grid and have a minimum size.
 
 ### Moving Cards
 
-1. **Click and hold** on a card's header (colored bar at the top)
-2. **Drag** the card to your desired position
-3. The card will snap to the grid when you release
-4. Cards can be moved while **selected** or **unselected**
-5. **Selected cards** can still be dragged normally
+Drag the **coloured header bar** at the top of any card. Cards snap to the grid on release and can be moved while selected or unselected.
 
 ### Canvas Navigation
 
-- **Click and drag** on empty space to pan the canvas
-- **Middle-mouse click** to instantly recenter to origin (with animation)
-- **Scroll** to navigate vertically and horizontally
-- **Recenter the view**: Press `Ctrl+0` to smoothly return to origin (0, 0)
-- Canvas has **infinite space** in all directions
-- Smooth **scrolling animations** for better user experience
+- **Pan:** Click + drag empty space, or scroll
+- **Recenter:** `Ctrl + 0` — smoothly animates back to origin (0, 0)
 
-### Theme & Settings
+---
 
-1. Click the **sidebar toggle** button (left edge of the screen)
-2. The sidebar slides in with smooth animation
-3. Access:
-   - **Theme switcher** (Light/Dark/Auto) with instant preview
-   - **Settings panel** (⚙️ gear icon) for detailed customization
-   - **Board management** - Create, rename, delete, and switch boards
-   - Animation preferences (enable/disable)
-   - Font selection (multiple monospace fonts)
-   - Font size adjustment (14-24pt)
-   - New board button position (top/bottom)
+### Theme & Appearance
 
-## 🎨 Supported Languages for Syntax Highlighting
+- **Sun / Moon** icon in the sidebar — toggle Dark / Light (animated diagonal wipe)
+- **Settings → Appearance:**
+  - Theme (Light / Dark)
+  - Accent colour (10 choices)
+  - Font family (multiple monospace fonts)
+  - Font size
 
-Code blocks support syntax highlighting for 40+ languages including:
+### Settings Overview
 
-- **Systems**: C, C++, C#, Rust, Go
-- **Web**: JavaScript, TypeScript, HTML, CSS, PHP
-- **Scripting**: Python, Ruby, Perl, Bash, PowerShell
-- **Data**: JSON, YAML, TOML, XML
-- **Database**: SQL
-- **JVM**: Java, Kotlin, Scala
-- **Mobile**: Swift, Objective-C
-- **Functional**: Haskell, Elixir, Erlang
-- And many more...
+| Category | Contents |
+|----------|----------|
+| **General** | Sidebar open on start, animations, new-board button position, card delete confirmation |
+| **Appearance** | Theme, accent colour, font family, font size |
+| **Shortcuts** | Full keyboard shortcut reference (read-only) |
+| **About** | App version, config path, debug mode toggle |
+
+### Delete Confirmation
+
+With **Confirm card deletion** enabled (default: on), deleting a card via the toolbar shows a confirmation dialog. Disable it in **Settings → General** for instant deletion.
+
+---
+
+## 🎨 Syntax Highlighting Languages
+
+40+ languages including C, C++, Rust, Go, Python, JavaScript, TypeScript, HTML, CSS, JSON, YAML, SQL, Java, Kotlin, Swift, Bash, and more.
+
+---
 
 ## 🏗️ Built With
 
-- [Rust](https://www.rust-lang.org/) - Systems programming language
-- [Iced](https://iced.rs/) - Cross-platform GUI library
-- [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) - Markdown parser
-- [syntect](https://github.com/trishume/syntect) - Syntax highlighting
-- [Bootstrap Icons](https://icons.getbootstrap.com/) - Icon library
+- [Rust](https://www.rust-lang.org/) — Systems programming language
+- [Iced](https://iced.rs/) — Cross-platform GUI library
+- [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) — Markdown parser
+- [syntect](https://github.com/trishume/syntect) — Syntax highlighting
+- [Bootstrap Icons](https://icons.getbootstrap.com/) — Icon library
+- [arboard](https://github.com/1Password/arboard) — System clipboard
+- [dirs](https://github.com/dirs-dev/dirs-rs) — Platform config directories
+
+---
 
 ## 🛠️ Configuration
 
-Configuration is automatically stored in:
-- **Linux**: `~/.config/cards/config.toml`
-- **macOS**: `~/Library/Application Support/cards/config.toml`
-- **Windows**: `%APPDATA%\cards\config.toml`
+| Platform | Path |
+|----------|------|
+| Linux    | `~/.config/cards/config.toml` |
+| macOS    | `~/Library/Application Support/cards/config.toml` |
+| Windows  | `%APPDATA%\cards\config.toml` |
 
-### Auto-Healing Configuration
+### Self-Healing Config
 
-The configuration system is self-healing:
-- Missing settings are automatically added with default values
-- Outdated settings are automatically removed
-- No manual config file editing needed
-- Safe to delete - will regenerate with defaults
+Missing keys are added with defaults; obsolete keys are removed — automatically on every launch.
 
 ### Available Settings
 
-**General**
-- Theme (Light/Dark/Auto)
-- Enable/disable animations
-- New board button position (top/bottom)
+| Key | Default | Description |
+|-----|---------|-------------|
+| `general.sidebar_open_on_start` | `true` | Open sidebar on launch |
+| `general.enable_animations` | `true` | Enable all animations |
+| `general.new_board_button_at_top` | `false` | Place new-board button at top of list |
+| `general.confirm_card_delete` | `true` | Confirmation dialog before deleting a card |
+| `general.debug_mode` | `false` | Print debug output to the console |
+| `appearance.theme` | `light` | `light` or `dark` |
+| `appearance.accent_color` | `purple` | Accent colour (`purple`, `blue`, `red`, `green`, `orange`, `pink`, `cyan`, `yellow`, `gray`, `coral`) |
+| `appearance.font.family` | `jetbrainsmono` | Monospace font for card text |
+| `appearance.font.size` | `14.0` | Font size in points |
 
-**Appearance**
-- Font family (multiple monospace fonts)
-- Font size (14-24pt)
-
-All settings can be changed through the in-app Settings panel.
+---
 
 ## 📝 Tips & Tricks
 
-1. **Quick Markdown**: Type `<md>` and press `>` - the closing tag auto-completes with the cursor positioned perfectly
-2. **Multi-line Code**: Use triple backticks with a language name for syntax-highlighted code blocks
-3. **Organization**: Use different colors and icons to categorize your cards
-4. **Multiple Boards**: Organize related cards into separate boards - great for different projects
-5. **Keyboard Navigation**: Press `Ctrl+Tab` to quickly switch between boards without touching the mouse
-6. **Quick Rename**: Double-click or click twice on any board name to rename it instantly
-7. **Interactive Todos**: Checkboxes in markdown are clickable - perfect for task lists
-8. **Card Duplication**: Use the duplicate button (📋) to quickly create similar cards
-9. **Smooth Workflow**: Cards auto-save per board, so you never lose your work
-10. **Font Customization**: Choose your preferred monospace font and size in settings
-11. **Grid Snapping**: Cards and resize operations snap to the grid for perfect alignment
-12. **Toolbar Shortcuts**: Select text and use toolbar buttons to wrap it in markdown formatting
-13. **Hover Actions**: Hover over boards to reveal the delete button
-14. **Canvas Reset**: Lost your cards off-screen? Press `Ctrl+0` or middle-click to recenter
+1. **Quick card:** `Ctrl + A` drops a focused card at the centre of your current view
+2. **Auto-complete Markdown:** Type `<md>` + `>` and the closing tag inserts itself
+3. **Syntax highlighting:** ` ```python ` opens a highlighted Python block
+4. **Colour categories:** Assign colours + icons to group related cards visually
+5. **Board-per-project:** Use separate boards for different projects; `Ctrl + Tab` to switch
+6. **Inline rename:** Double-click any board to rename it
+7. **Clickable checkboxes:** `- [ ]` / `- [x]` items are directly toggleable in rendered view
+8. **Toolbar wrapping:** Select text → click a toolbar button to wrap it in markdown syntax
+9. **Grid snapping:** Drag and resize both snap to the dot grid for perfect alignment
+10. **Lost on canvas?** `Ctrl + 0` animates back to origin smoothly
+11. **Font tuning:** Settings → Appearance → Fonts for family and size
+12. **Board delete button:** Hover a board in the sidebar to reveal the red delete button
+
+---
 
 ## 🤝 Contributing
 
@@ -335,4 +327,3 @@ For questions or feedback, please open an issue on GitHub.
 ---
 
 **Made with ❤️ and Rust**
-

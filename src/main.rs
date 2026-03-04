@@ -3605,16 +3605,134 @@ impl Cards {
                 .into()
             }
             SettingsCategory::Shortcuts => {
-                column![
+                let text_color = self.theme.button_text();
+                let accent     = self.accent_color;
+                let dim_color  = Color::from_rgba(text_color.r, text_color.g, text_color.b, 0.55);
+                let sep_color  = Color::from_rgba(text_color.r, text_color.g, text_color.b, 0.12);
+                let key_bg     = Color::from_rgba(accent.r, accent.g, accent.b, 0.18);
+                let key_bdr    = Color::from_rgba(accent.r, accent.g, accent.b, 0.40);
+
+                // All shortcut data as plain slices — no closures with lifetimes
+                // Format: ("key label", "description") — None key = section header, ("---", "") = separator
+                let entries: &[(&str, &str)] = &[
+                    // Canvas
+                    ("SECTION", "Canvas"),
+                    ("Ctrl + 0",              "Recenter canvas to origin"),
+                    ("Middle Mouse",          "Pan canvas"),
+                    ("Scroll",                "Pan canvas vertically / horizontally"),
+                    ("Click + Drag",          "Pan canvas (on empty space)"),
+                    ("SEP", ""),
+                    // Boards
+                    ("SECTION", "Boards"),
+                    ("Ctrl + Tab",            "Switch to next board"),
+                    ("Ctrl + Shift + Tab",    "Switch to previous board"),
+                    ("Double-click board",    "Rename board"),
+                    ("SEP", ""),
+                    // Cards
+                    ("SECTION", "Cards"),
+                    ("Ctrl + A",              "Add new card at canvas centre (auto-focuses)"),
+                    ("Right-click canvas",    "Open context menu  \u{2192}  Add Card"),
+                    ("Click",                 "Select card"),
+                    ("Double-click",          "Start editing card"),
+                    ("Drag header",           "Move card"),
+                    ("Drag \u{2198} handle",  "Resize card"),
+                    ("Esc",                   "Stop editing / deselect card"),
+                    ("SEP", ""),
+                    // Text Editing
+                    ("SECTION", "Text Editing"),
+                    ("Tab",                   "Insert 4 spaces"),
+                    ("Enter",                 "New line"),
+                    ("Backspace",             "Delete previous character"),
+                    ("Ctrl + Backspace",      "Delete previous word"),
+                    ("Delete",                "Delete next character"),
+                    ("Ctrl + Delete",         "Delete next word"),
+                    ("SEP", ""),
+                    // Cursor Navigation
+                    ("SECTION", "Cursor Navigation"),
+                    ("Arrow Keys",            "Move cursor"),
+                    ("Ctrl + \u{2190} / \u{2192}", "Jump to previous / next word"),
+                    ("Home",                  "Move to start of line"),
+                    ("End",                   "Move to end of line"),
+                    ("SEP", ""),
+                    // Text Selection
+                    ("SECTION", "Text Selection"),
+                    ("Shift + Arrows",        "Extend selection"),
+                    ("Shift + Ctrl + \u{2190} / \u{2192}", "Extend selection word by word"),
+                    ("Click + Drag",          "Select text with mouse"),
+                    ("Ctrl + A",              "Select all text (while editing)"),
+                    ("SEP", ""),
+                    // Clipboard
+                    ("SECTION", "Clipboard"),
+                    ("Ctrl + C",              "Copy selected text"),
+                    ("Ctrl + X",              "Cut selected text"),
+                    ("Ctrl + V",              "Paste from clipboard"),
+                    ("SEP", ""),
+                    // Toolbar
+                    ("SECTION", "Toolbar  (card selected)"),
+                    ("# button",              "Heading prefix"),
+                    ("B button",              "Bold  **text**"),
+                    ("I button",              "Italic  *text*"),
+                    ("S button",              "Strikethrough  ~~text~~"),
+                    ("` button",              "Inline code"),
+                    ("</> button",            "Code block"),
+                    ("\u{2022} button",       "Bullet point"),
+                    ("Duplicate button",      "Duplicate card"),
+                    ("Delete button",         "Delete card  (confirmation dialog)"),
+                    ("SEP", ""),
+                    // App
+                    ("SECTION", "App"),
+                    ("Esc",                   "Close menus / dialogs / settings"),
+                ];
+
+                let mut col: iced::widget::Column<Message> = column![
                     text("Keyboard Shortcuts").size(16).font(iced::Font {
                         weight: iced::font::Weight::Bold,
                         ..Default::default()
                     }),
-                    Space::with_height(20),
-                    text("Keyboard shortcuts will be configured here.").size(14),
-                ]
-                .spacing(10)
-                .into()
+                    Space::with_height(16),
+                ].spacing(0);
+
+                for (k, d) in entries {
+                    if *k == "SECTION" {
+                        col = col.push(
+                            text(*d).size(13).font(iced::Font {
+                                weight: iced::font::Weight::Semibold,
+                                ..Default::default()
+                            }).color(dim_color)
+                        );
+                        col = col.push(Space::with_height(6));
+                    } else if *k == "SEP" {
+                        col = col.push(Space::with_height(10));
+                        col = col.push(
+                            container(Space::with_height(1))
+                                .width(Length::Fill)
+                                .height(1)
+                                .style(move |_: &IcedTheme| container::Style {
+                                    background: Some(iced::Background::Color(sep_color)),
+                                    ..Default::default()
+                                })
+                        );
+                        col = col.push(Space::with_height(10));
+                    } else {
+                        col = col.push(
+                            row![
+                                text(*d).size(13).color(text_color),
+                                Space::with_width(Length::Fill),
+                                container(text(*k).size(12).color(text_color))
+                                    .padding(Padding { top: 2.0, right: 7.0, bottom: 2.0, left: 7.0 })
+                                    .style(move |_: &IcedTheme| container::Style {
+                                        background: Some(iced::Background::Color(key_bg)),
+                                        border: Border { color: key_bdr, width: 1.0, radius: 5.0.into() },
+                                        ..Default::default()
+                                    }),
+                            ]
+                            .align_y(Alignment::Center)
+                        );
+                        col = col.push(Space::with_height(4));
+                    }
+                }
+
+                col.into()
             }
             SettingsCategory::About => {
                 let config_path = Config::config_path()
@@ -3653,6 +3771,31 @@ impl Cards {
             }
         };
 
+        let accent = self.accent_color;
+        let settings_scrollbar_style = move |_theme: &IcedTheme, _status: iced::widget::scrollable::Status| {
+            use iced::widget::scrollable::{Rail, Scroller};
+            iced::widget::scrollable::Style {
+                container: iced::widget::container::Style::default(),
+                vertical_rail: Rail {
+                    background: None,
+                    border: Border::default(),
+                    scroller: Scroller {
+                        color: accent,
+                        border: Border { radius: 2.0.into(), ..Default::default() },
+                    },
+                },
+                horizontal_rail: Rail {
+                    background: None,
+                    border: Border::default(),
+                    scroller: Scroller {
+                        color: accent,
+                        border: Border { radius: 2.0.into(), ..Default::default() },
+                    },
+                },
+                gap: None,
+            }
+        };
+
         container(
             scrollable(
                 container(content)
@@ -3663,6 +3806,12 @@ impl Cards {
                         left: 20.0,
                     })
             )
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(4)
+                    .scroller_width(4)
+            ))
+            .style(settings_scrollbar_style)
         )
         .width(Length::Fill)
         .height(Length::Fill)
