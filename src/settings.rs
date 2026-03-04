@@ -187,10 +187,10 @@ where
                 b: self.background.b * (1.0 - self.accent.a) + self.accent.b * self.accent.a,
                 a: 1.0,
             };
-            // Diagonal gradient: 135° = top-left → bottom-right
+            // Diagonal gradient: 135° = top-left → bottom-right (accent first, then background)
             let gradient = gradient::Linear::new(Radians(std::f32::consts::PI * 0.75))
-                .add_stop(0.0, self.background)
-                .add_stop(1.0, blended);
+                .add_stop(0.0, blended)
+                .add_stop(1.0, self.background);
 
             renderer.fill_quad(
                 renderer::Quad {

@@ -1,4 +1,4 @@
-use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder};
+use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder, gradient};
 use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector};
 use crate::card::Card;
 use crate::markdown::MarkdownRenderer;
@@ -50,6 +50,7 @@ pub struct DotGrid {
     card_background: Color,
     card_border: Color,
     card_text: Color,
+    accent_color: Color,
     font: iced::Font,
     font_size: f32,
     debug_mode: bool,
@@ -74,6 +75,7 @@ impl DotGrid {
             card_background: Color::WHITE,
             card_border: Color::from_rgb8(200, 200, 200),
             card_text: Color::from_rgb8(51, 51, 51),
+            accent_color: Color::from_rgb8(124, 92, 252),
             font: iced::Font::MONOSPACE,
             font_size: 14.0,
             debug_mode: false,
@@ -151,6 +153,11 @@ impl DotGrid {
         self.card_background = background;
         self.card_border = border;
         self.card_text = text;
+        self.cards_cache.clear();
+    }
+
+    pub fn set_accent_color(&mut self, color: Color) {
+        self.accent_color = color;
         self.cards_cache.clear();
     }
 
@@ -433,7 +440,7 @@ impl DotGrid {
             // Sidebar now uses renderer.with_layer() to ensure it renders on top of canvas
             let corner_radius = 12.0;
 
-            // Draw card background with theme color
+            // Draw card background — always plain, no gradient on body
             frame.fill(
                 &rounded_rectangle(card_rect, corner_radius),
                 self.card_background,
@@ -447,7 +454,7 @@ impl DotGrid {
                     .with_width(1.0),
             );
 
-            // Draw top bar background
+            // Draw top bar background — subtle left-to-right gradient using the card's own color
             let top_bar_height = 30.0;
             let top_bar_rect = Rectangle {
                 x: card_rect.x,
@@ -455,15 +462,32 @@ impl DotGrid {
                 width: card_rect.width,
                 height: top_bar_height,
             };
-            frame.fill(
-                &rounded_rectangle_top(top_bar_rect, corner_radius),
-                Color::from_rgba(
+            {
+                let card_color = card.color;
+                // Left: fades from transparent border tint; right: card colour at low alpha
+                let bar_left = Color::from_rgba(
                     self.card_border.r,
                     self.card_border.g,
                     self.card_border.b,
-                    0.3,
-                ),
-            );
+                    0.15,
+                );
+                let bar_right = Color {
+                    r: card_color.r,
+                    g: card_color.g,
+                    b: card_color.b,
+                    a: 0.30,
+                };
+                let top_bar_grad = gradient::Linear::new(
+                    Point::new(top_bar_rect.x, top_bar_rect.y),
+                    Point::new(top_bar_rect.x + top_bar_rect.width, top_bar_rect.y),
+                )
+                .add_stop(0.0, bar_left)
+                .add_stop(1.0, bar_right);
+                frame.fill(
+                    &rounded_rectangle_top(top_bar_rect, corner_radius),
+                    top_bar_grad,
+                );
+            }
 
             // Icons are now rendered as SVG widget overlays (not in canvas)
 

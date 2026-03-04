@@ -524,7 +524,7 @@ impl Card {
             target_width: Self::MIN_WIDTH,
             target_height: Self::MIN_HEIGHT,
             icon: CardIcon::Default,
-            color: Color::from_rgb8(100, 150, 255), // Default blue
+            color: Color::from_rgb8(124, 92, 252), // Default purple (matches app accent)
             is_dragging: false,
             content: CustomTextEditor::new(),
             is_editing: false,

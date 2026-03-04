@@ -107,7 +107,30 @@ impl Theme {
         }
     }
 
-    // Accent colors — same for both themes (purple brand color)
+    // Accent colors — driven by the accent Color passed in from config
+    pub fn accent_from(&self, base: Color) -> Color {
+        base
+    }
+
+    pub fn accent_dim_from(&self, base: Color) -> Color {
+        // Darken by ~25%
+        Color {
+            r: (base.r * 0.75).min(1.0),
+            g: (base.g * 0.75).min(1.0),
+            b: (base.b * 0.75).min(1.0),
+            a: base.a,
+        }
+    }
+
+    pub fn accent_glow_from(&self, base: Color) -> Color {
+        Color { a: 0.22, ..base }
+    }
+
+    pub fn accent_bg_from(&self, base: Color) -> Color {
+        Color { a: 0.08, ..base }
+    }
+
+    // Legacy fixed-purple methods kept for backward compat; prefer *_from variants
     pub fn accent(&self) -> Color {
         Color::from_rgb8(124, 92, 252)
     }

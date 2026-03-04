@@ -132,13 +132,13 @@ where
             renderer.with_layer(full_bounds, |renderer| {
                 // Build vertical gradient: background color at top → subtle accent tint at bottom
                 let gradient = gradient::Linear::new(Radians(std::f32::consts::PI)) // top → bottom
-                    .add_stop(0.0, self.background)
-                    .add_stop(1.0, Color {
+                    .add_stop(0.0, Color {
                         r: self.background.r * (1.0 - self.accent.a) + self.accent.r * self.accent.a,
                         g: self.background.g * (1.0 - self.accent.a) + self.accent.g * self.accent.a,
                         b: self.background.b * (1.0 - self.accent.a) + self.accent.b * self.accent.a,
                         a: 1.0,
-                    });
+                    })
+                    .add_stop(1.0, self.background);
 
                 // Draw background with shadow and gradient
                 renderer.fill_quad(

@@ -1,4 +1,5 @@
 use crate::theme::Theme;
+use iced::Color;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -26,6 +27,10 @@ pub struct AppearanceConfig {
 
     #[serde(default)]
     pub font: FontConfig,
+
+    #[serde(default = "default_accent_color")]
+    pub accent_color: AccentColor,
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +69,75 @@ pub enum ThemeConfig {
     Dark,
 }
 
+/// Accent color options — same palette as card symbol colors
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AccentColor {
+    Purple,
+    Blue,
+    Red,
+    Green,
+    Orange,
+    Pink,
+    Cyan,
+    Yellow,
+    Gray,
+    Coral,
+}
+
+impl Default for AccentColor {
+    fn default() -> Self {
+        AccentColor::Purple
+    }
+}
+
+impl AccentColor {
+    pub fn all() -> &'static [AccentColor] {
+        &[
+            AccentColor::Purple,
+            AccentColor::Blue,
+            AccentColor::Red,
+            AccentColor::Green,
+            AccentColor::Orange,
+            AccentColor::Pink,
+            AccentColor::Cyan,
+            AccentColor::Yellow,
+            AccentColor::Gray,
+            AccentColor::Coral,
+        ]
+    }
+
+    pub fn to_color(self) -> Color {
+        match self {
+            AccentColor::Purple => Color::from_rgb8(124, 92, 252),
+            AccentColor::Blue   => Color::from_rgb8(100, 150, 255),
+            AccentColor::Red    => Color::from_rgb8(255, 100, 100),
+            AccentColor::Green  => Color::from_rgb8(100, 210, 100),
+            AccentColor::Orange => Color::from_rgb8(255, 180, 60),
+            AccentColor::Pink   => Color::from_rgb8(255, 130, 200),
+            AccentColor::Cyan   => Color::from_rgb8(80, 220, 230),
+            AccentColor::Yellow => Color::from_rgb8(230, 210, 60),
+            AccentColor::Gray   => Color::from_rgb8(150, 150, 160),
+            AccentColor::Coral  => Color::from_rgb8(255, 120, 80),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AccentColor::Purple => "Purple",
+            AccentColor::Blue   => "Blue",
+            AccentColor::Red    => "Red",
+            AccentColor::Green  => "Green",
+            AccentColor::Orange => "Orange",
+            AccentColor::Pink   => "Pink",
+            AccentColor::Cyan   => "Cyan",
+            AccentColor::Yellow => "Yellow",
+            AccentColor::Gray   => "Gray",
+            AccentColor::Coral  => "Coral",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FontConfig {
     #[serde(default = "default_font_family")]
@@ -81,6 +155,10 @@ pub enum FontFamily {
     SourceCodePro,
     DejaVuSansMono,
     CourierNew,
+}
+
+fn default_accent_color() -> AccentColor {
+    AccentColor::Purple
 }
 
 // Default value functions for serde
@@ -113,6 +191,7 @@ impl Default for AppearanceConfig {
         Self {
             theme: default_theme(),
             font: FontConfig::default(),
+            accent_color: default_accent_color(),
         }
     }
 }
@@ -314,6 +393,11 @@ impl Config {
 
     pub fn set_debug_mode(&mut self, enabled: bool) -> Result<(), ConfigError> {
         self.general.debug_mode = enabled;
+        self.save()
+    }
+
+    pub fn set_accent_color(&mut self, color: AccentColor) -> Result<(), ConfigError> {
+        self.appearance.accent_color = color;
         self.save()
     }
 }
