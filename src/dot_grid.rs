@@ -430,6 +430,14 @@ impl DotGrid {
     }
 
     fn draw_static_dots(&self, frame: &mut Frame, bounds: Rectangle) {
+        // Always fill the background first — on Windows the window may not
+        // default to a dark background so we must paint it explicitly.
+        frame.fill_rectangle(
+            Point::new(0.0, 0.0),
+            iced::Size::new(bounds.width, bounds.height),
+            self.background_color,
+        );
+
         // Calculate the visible grid range based on offset
         let offset_x = self.offset.x % self.dot_spacing;
         let offset_y = self.offset.y % self.dot_spacing;
@@ -901,10 +909,10 @@ impl Program<DotGridMessage> for &DotGrid {
 
                                 if screen_bounds.contains(pos) {
                                     let icon_bounds = Rectangle {
-                                        x: screen_bounds.x + 5.0,
-                                        y: screen_bounds.y + 5.0,
-                                        width: 20.0,
-                                        height: 20.0,
+                                        x: screen_bounds.x + 8.0,
+                                        y: screen_bounds.y + 6.0,
+                                        width: 18.0,
+                                        height: 18.0,
                                     };
 
                                     if icon_bounds.contains(pos) {

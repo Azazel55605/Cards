@@ -139,7 +139,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 }
 
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.1.7";
+const APP_VERSION: &str = "0.1.8";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
@@ -383,6 +383,15 @@ impl Cards {
         dot_grid.set_accent_color(config.appearance.accent_color.to_color());
         // Set debug mode from config
         dot_grid.set_debug_mode(config.general.debug_mode);
+        // Auto-select best available font if the configured one isn't installed
+        if !config.appearance.font.family.is_available() {
+            if let Some(best) = FontFamily::best_available() {
+                config.appearance.font.family = best;
+            }
+            // If none of our named fonts are available, iced::Font::MONOSPACE
+            // (the system monospace) will be used via to_iced_font() fallback.
+        }
+
         // Set font from config
         let font = config.appearance.font.family.to_iced_font();
         if config.general.debug_mode {
@@ -1140,8 +1149,8 @@ impl Cards {
                     card.color = color;
                     self.dot_grid.clear_cards_cache();
                 }
-                self.card_icon_menu_position = None;
-                self.card_icon_menu_card_id = None;
+                // Keep the icon menu open so the user can see the icons update
+                // with the new color. The menu will close normally on outside click.
                 self.workspace_dirty = true;
             }
             Message::StartEditingCard(card_id) => {
@@ -2939,28 +2948,14 @@ impl Cards {
             view = Overlay::new(view, context_menu).into();
         }
 
-        // Add card icon menu (before sidebar)
-        if let Some(pos) = self.card_icon_menu_position {
-            let card_menu_content = self.build_card_icon_menu();
-            let card_menu: Element<Message> = ContextMenu::new(
-                card_menu_content,
-                pos,
-                sidebar_bg,
-                self.theme.button_border(),
-                sidebar_shadow,
-            )
-            .width(200.0)
-            .on_close(Message::HideCardIconMenu)
-            .into();
-
-            view = Overlay::new(view, card_menu).into();
-        }
-
         // Add icon overlays for all cards - renders Bootstrap Icons properly
         for card in self.dot_grid.cards().iter() {
-            let icon_size = 20.0;
-            let icon_x = card.current_position.x + self.canvas_offset.x + 5.0;
-            let icon_y = card.current_position.y + self.canvas_offset.y + 5.0;
+            let icon_size = 18.0;
+            let top_bar_height = 30.0;
+            // Center the icon vertically in the top bar, and keep enough left
+            // margin to stay clear of the corner_radius=12 curve.
+            let icon_x = card.current_position.x + self.canvas_offset.x + 8.0;
+            let icon_y = card.current_position.y + self.canvas_offset.y + (top_bar_height - icon_size) / 2.0;
 
             let svg_data = icon_util::icon_to_svg(card.icon.get_icondata());
             let icon_widget = svg(svg::Handle::from_memory(svg_data))
@@ -2998,6 +2993,23 @@ impl Cards {
 
                 view = Overlay::new(view, toolbar).into();
             }
+        }
+
+        // Add card icon menu AFTER toolbar and card overlays so it renders on top
+        if let Some(pos) = self.card_icon_menu_position {
+            let card_menu_content = self.build_card_icon_menu();
+            let card_menu: Element<Message> = ContextMenu::new(
+                card_menu_content,
+                pos,
+                sidebar_bg,
+                self.theme.button_border(),
+                sidebar_shadow,
+            )
+            .width(200.0)
+            .on_close(Message::HideCardIconMenu)
+            .into();
+
+            view = Overlay::new(view, card_menu).into();
         }
 
         // Build sidebar content with title
@@ -4202,13 +4214,15 @@ impl Cards {
     }
 
     fn build_card_icon_menu(&self) -> Element<Message> {
-        let bg_color = self.theme.sidebar_background();
         let separator_color = self.theme.icon_color().scale_alpha(0.2);
         let accent_bg = self.theme.accent_bg_from(self.accent_color);
 
-        // Get the current card's color
+        // Get the current card's color — find by ID, not by Vec index
         let card_color = if let Some(card_id) = self.card_icon_menu_card_id {
-            self.dot_grid.cards().get(card_id).map(|c| c.color).unwrap_or(Color::from_rgb8(124, 92, 252))
+            self.dot_grid.cards().iter()
+                .find(|c| c.id == card_id)
+                .map(|c| c.color)
+                .unwrap_or(Color::from_rgb8(124, 92, 252))
         } else {
             Color::from_rgb8(124, 92, 252)
         };
@@ -4344,14 +4358,6 @@ impl Cards {
         .width(Length::Fill);
 
         container(content)
-            .style(move |_theme: &IcedTheme| {
-                container::Style {
-                    background: Some(iced::Background::Color(bg_color)),
-                    border: Border::default(),
-                    shadow: Shadow::default(),
-                    text_color: None,
-                }
-            })
             .into()
     }
 

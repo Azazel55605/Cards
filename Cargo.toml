@@ -1,6 +1,6 @@
 [package]
 name = "Cards"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 build = "build.rs"
 
@@ -15,6 +15,7 @@ icondata_core = "0.1"
 icondata_bs = "0.1.0"
 syntect = "5.2"
 rmp-serde = "1.3.1"
+fontdb = "0.22"
 
 # arboard: use wayland-data-control only on Linux (Wayland), plain on all other targets
 [target.'cfg(target_os = "linux")'.dependencies]

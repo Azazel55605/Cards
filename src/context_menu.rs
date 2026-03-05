@@ -126,25 +126,29 @@ where
             let content_size = content_layout.bounds().size();
             let menu_bounds = self.calculate_menu_bounds(full_bounds, content_size.height);
 
-            // Draw menu background with shadow
+            // 1. Shadow — drawn first, outside any layer, so it bleeds outward
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: menu_bounds,
-                    border: Border {
-                        color: self.border_color,
-                        width: 1.0,
-                        radius: 10.0.into(),
-                    },
+                    border: Border::default(),
                     shadow: Shadow {
                         color: self.shadow_color,
                         offset: Vector::new(0.0, 4.0),
                         blur_radius: 12.0,
                     },
                 },
-                self.background,
+                Color::TRANSPARENT,
             );
 
-            // Translate cursor for content
+            // 2. Clip content (and its background fill) to the rounded area
+            let border_radius = 10.0;
+            let content_clip_bounds = Rectangle {
+                x: menu_bounds.x + 1.0,
+                y: menu_bounds.y + 1.0,
+                width: menu_bounds.width - 2.0,
+                height: menu_bounds.height - 2.0,
+            };
+
             let translated_cursor = if let Some(pos) = cursor.position() {
                 if menu_bounds.contains(pos) {
                     mouse::Cursor::Available(Point::new(
@@ -158,16 +162,20 @@ where
                 mouse::Cursor::Unavailable
             };
 
-            // Draw content with clipping to menu bounds (inset to respect rounded corners)
-            let border_radius = 8.0;
-            let content_clip_bounds = Rectangle {
-                x: menu_bounds.x + border_radius * 0.5,
-                y: menu_bounds.y + border_radius * 0.5,
-                width: menu_bounds.width - border_radius,
-                height: menu_bounds.height - border_radius,
-            };
-
             renderer.with_layer(content_clip_bounds, |renderer| {
+                // Background fill inside the layer — always behind content, clipped by radius
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: menu_bounds,
+                        border: Border {
+                            radius: border_radius.into(),
+                            ..Border::default()
+                        },
+                        shadow: Shadow::default(),
+                    },
+                    self.background,
+                );
+
                 renderer.with_translation(
                     Vector::new(menu_bounds.x - full_bounds.x, menu_bounds.y - full_bounds.y),
                     |renderer| {
@@ -183,6 +191,20 @@ where
                     },
                 );
             });
+
+            // 3. Border ring drawn last — always on top, never clipped
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: menu_bounds,
+                    border: Border {
+                        color: self.border_color,
+                        width: 1.0,
+                        radius: border_radius.into(),
+                    },
+                    shadow: Shadow::default(),
+                },
+                Color::TRANSPARENT,
+            );
         }
     }
 

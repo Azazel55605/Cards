@@ -4,6 +4,21 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// Cached set of available font family names (lower-case).
+/// Populated on first call to `FontFamily::is_available()`.
+static AVAILABLE_FONTS: OnceLock<Vec<String>> = OnceLock::new();
+
+fn available_font_names() -> &'static Vec<String> {
+    AVAILABLE_FONTS.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db.faces()
+            .flat_map(|f| f.families.iter().map(|(fam, _)| fam.to_lowercase()).collect::<Vec<_>>())
+            .collect()
+    })
+}
 
 const CONFIG_DIR_NAME: &str = "cards";
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -519,11 +534,38 @@ impl FontFamily {
             },
         }
     }
+
+    /// Check whether this font family is installed on the system.
+    /// Result is cached after the first call — safe to call in hot render paths.
+    pub fn is_available(&self) -> bool {
+        let name = self.as_str().to_lowercase();
+        available_font_names().iter().any(|fam| fam.contains(&name))
+    }
+
+    /// Return the best available font from the preference list.
+    pub fn best_available() -> Option<FontFamily> {
+        for &fam in &[
+            FontFamily::JetBrainsMono,
+            FontFamily::FiraCode,
+            FontFamily::SourceCodePro,
+            FontFamily::DejaVuSansMono,
+            FontFamily::CourierNew,
+        ] {
+            if fam.is_available() {
+                return Some(fam);
+            }
+        }
+        None
+    }
 }
 
 impl std::fmt::Display for FontFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        if self.is_available() {
+            write!(f, "{}", self.as_str())
+        } else {
+            write!(f, "{} (not installed)", self.as_str())
+        }
     }
 }
 
