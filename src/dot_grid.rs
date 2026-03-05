@@ -54,6 +54,10 @@ pub struct DotGrid {
     font: iced::Font,
     font_size: f32,
     debug_mode: bool,
+    /// Counter used when generating new card IDs (so loaded cards don't collide)
+    next_card_id: usize,
+    /// When true, all canvas input events are ignored (modal open etc.)
+    pub blocked: bool,
 }
 
 impl DotGrid {
@@ -79,6 +83,8 @@ impl DotGrid {
             font: iced::Font::MONOSPACE,
             font_size: 14.0,
             debug_mode: false,
+            next_card_id: 0,
+            blocked: false,
         }
     }
 
@@ -161,8 +167,17 @@ impl DotGrid {
         self.cards_cache.clear();
     }
 
+    pub fn set_next_card_id(&mut self, id: usize) {
+        self.next_card_id = id;
+    }
+
+    pub fn next_card_id(&self) -> usize {
+        self.next_card_id
+    }
+
     pub fn add_card(&mut self, screen_position: Point, color: Color) -> usize {
-        let id = self.cards.len();
+        let id = self.next_card_id;
+        self.next_card_id += 1;
         let world_position = Point::new(
             screen_position.x - self.offset.x,
             screen_position.y - self.offset.y,
@@ -189,7 +204,8 @@ impl DotGrid {
         icon: crate::card::CardIcon,
         color: Color,
     ) -> usize {
-        let id = self.cards.len();
+        let id = self.next_card_id;
+        self.next_card_id += 1;
         let world_position = Point::new(
             screen_position.x - self.offset.x,
             screen_position.y - self.offset.y,
@@ -217,7 +233,8 @@ impl DotGrid {
         width: f32,
         height: f32,
     ) -> usize {
-        let id = self.cards.len();
+        let id = self.next_card_id;
+        self.next_card_id += 1;
         let world_position = Point::new(
             screen_position.x - self.offset.x,
             screen_position.y - self.offset.y,
@@ -228,7 +245,6 @@ impl DotGrid {
         card.content.set_font(self.font, self.font_size);
         card.icon = icon;
         card.color = color;
-        // Set the custom size
         card.width = width;
         card.height = height;
         card.target_width = width;
@@ -269,6 +285,14 @@ impl DotGrid {
 
     pub fn dot_spacing(&self) -> f32 {
         self.dot_spacing
+    }
+
+    pub fn font(&self) -> iced::Font {
+        self.font
+    }
+
+    pub fn font_size(&self) -> f32 {
+        self.font_size
     }
 
     pub fn offset(&self) -> Vector {
@@ -706,6 +730,18 @@ impl Program<DotGridMessage> for &DotGrid {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (iced::widget::canvas::event::Status, Option<DotGridMessage>) {
+        // All input is blocked while a modal is open
+        if self.blocked {
+            // Also clear any in-progress drag/pan so it doesn't resume after close
+            state.is_panning = false;
+            state.pan_start = None;
+            state.dragging_card = None;
+            state.drag_offset = None;
+            state.resizing_card = None;
+            state.selecting_text_card = None;
+            return (iced::widget::canvas::event::Status::Ignored, None);
+        }
+
         let current_pos = cursor.position_in(bounds);
 
         match event {

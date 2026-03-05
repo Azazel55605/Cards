@@ -70,14 +70,19 @@ where
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        let child_layout = layout.children().next().unwrap();
+        // Use the union of the actual viewport and the child's own bounds so that
+        // widgets positioned off-screen (e.g. card icons on a panned canvas) are
+        // never culled by the renderer's viewport scissor test.
+        let expanded_viewport = viewport.union(&child_layout.bounds());
         self.content.as_widget().draw(
             &tree.children[0],
             renderer,
             theme,
             style,
-            layout.children().next().unwrap(),
+            child_layout,
             cursor,
-            viewport,
+            &expanded_viewport,
         );
     }
 

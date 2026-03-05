@@ -49,6 +49,14 @@ pub struct GeneralConfig {
 
     #[serde(default = "default_true")]
     pub confirm_card_delete: bool,
+
+    /// Path of the last opened workspace file (None = first launch or cleared)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_workspace: Option<String>,
+
+    /// Up to 5 most recently opened workspace paths (most recent first)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_workspaces: Vec<String>,
 }
 
 fn default_false() -> bool {
@@ -216,6 +224,8 @@ impl Default for GeneralConfig {
             new_board_button_at_top: default_false(),
             debug_mode: default_false(),
             confirm_card_delete: default_true(),
+            last_workspace: None,
+            recent_workspaces: Vec::new(),
         }
     }
 }
@@ -408,6 +418,33 @@ impl Config {
     pub fn set_accent_color(&mut self, color: AccentColor) -> Result<(), ConfigError> {
         self.appearance.accent_color = color;
         self.save()
+    }
+
+    pub fn set_last_workspace(&mut self, path: Option<String>) -> Result<(), ConfigError> {
+        self.general.last_workspace = path;
+        self.save()
+    }
+
+    /// Add a path to the recent workspaces list (most-recent-first, max 5).
+    /// Also sets `last_workspace`.
+    pub fn push_recent_workspace(&mut self, path: String) -> Result<(), ConfigError> {
+        // Remove if already present (we'll re-insert at front)
+        self.general.recent_workspaces.retain(|p| p != &path);
+        self.general.recent_workspaces.insert(0, path.clone());
+        self.general.recent_workspaces.truncate(5);
+        self.general.last_workspace = Some(path);
+        self.save()
+    }
+
+    /// Remove any recent workspace entries whose files no longer exist on disk.
+    pub fn prune_missing_recents(&mut self) {
+        self.general.recent_workspaces.retain(|p| std::path::Path::new(p).exists());
+        // If last_workspace is gone too, clear it
+        if let Some(ref p) = self.general.last_workspace.clone() {
+            if !std::path::Path::new(p).exists() {
+                self.general.last_workspace = None;
+            }
+        }
     }
 }
 

@@ -21,6 +21,8 @@ pub enum AppMenuItem<Message> {
     Separator,
     /// A small dimmed section header (not clickable).
     Label(String),
+    /// A submenu trigger row — fires on_hover when hovered, on_close when un-hovered.
+    SubMenu { label: String, enabled: bool, on_hover: Option<Message>, on_close: Option<Message> },
 }
 
 // ─── State stored in the widget tree ─────────────────────────────────────────
@@ -46,6 +48,8 @@ where
     hover_color: Color,
     shadow_color: Color,
     on_close: Option<Message>,
+    on_submenu_hover: Option<Message>,
+    on_submenu_close: Option<Message>,
     animation_progress: f32,
     _renderer: std::marker::PhantomData<Renderer>,
 }
@@ -66,6 +70,8 @@ where
             hover_color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
             shadow_color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
             on_close: None,
+            on_submenu_hover: None,
+            on_submenu_close: None,
             animation_progress: 1.0,
             _renderer: std::marker::PhantomData,
         }
@@ -79,6 +85,8 @@ where
     pub fn hover_color(mut self, c: Color) -> Self { self.hover_color = c; self }
     pub fn shadow_color(mut self, c: Color) -> Self { self.shadow_color = c; self }
     pub fn on_close(mut self, msg: Message) -> Self { self.on_close = Some(msg); self }
+    pub fn on_submenu_hover(mut self, msg: Message) -> Self { self.on_submenu_hover = Some(msg); self }
+    pub fn on_submenu_close(mut self, msg: Message) -> Self { self.on_submenu_close = Some(msg); self }
     pub fn animation_progress(mut self, p: f32) -> Self {
         self.animation_progress = p.clamp(0.0, 1.0);
         self
@@ -88,9 +96,10 @@ where
 
     fn item_height(item: &AppMenuItem<Message>) -> f32 {
         match item {
-            AppMenuItem::Button { .. } => 32.0,
-            AppMenuItem::Separator   => 9.0,
-            AppMenuItem::Label(_)    => 26.0,
+            AppMenuItem::Button { .. }  => 32.0,
+            AppMenuItem::SubMenu { .. } => 32.0,
+            AppMenuItem::Separator      => 9.0,
+            AppMenuItem::Label(_)       => 26.0,
         }
     }
 
@@ -253,13 +262,18 @@ where
                         );
                     }
 
-                    AppMenuItem::Button { label, .. } => {
+                    AppMenuItem::Button { label, .. } | AppMenuItem::SubMenu { label, .. } => {
+                        let is_submenu = matches!(item, AppMenuItem::SubMenu { .. });
+                        let enabled = match item {
+                            AppMenuItem::SubMenu { enabled, .. } => *enabled,
+                            _ => true,
+                        };
                         let item_rect = Rectangle {
                             x: rect.x + 4.0, y: item_y,
                             width: rect.width - 8.0, height: item_h,
                         };
 
-                        if hovered_index == Some(i) {
+                        if hovered_index == Some(i) && enabled {
                             let hover_c = Color { a: hover_color.a * alpha, ..hover_color };
                             renderer.fill_quad(
                                 renderer::Quad {
@@ -271,7 +285,8 @@ where
                             );
                         }
 
-                        let text_c = Color { a: text_color.a * alpha, ..text_color };
+                        let label_alpha = if enabled { alpha } else { alpha * 0.35 };
+                        let text_c = Color { a: text_color.a * label_alpha, ..text_color };
                         renderer.fill_text(
                             text_trait::Text {
                                 content: label.clone(),
@@ -288,6 +303,26 @@ where
                             text_c,
                             item_rect,
                         );
+
+                        // Draw ▶ arrow for SubMenu
+                        if is_submenu {
+                            renderer.fill_text(
+                                text_trait::Text {
+                                    content: "▶".to_string(),
+                                    bounds: Size::new(16.0, item_h),
+                                    size: iced::Pixels(10.0 * scale),
+                                    line_height: iced::widget::text::LineHeight::default(),
+                                    font: iced::Font::default(),
+                                    horizontal_alignment: iced::alignment::Horizontal::Right,
+                                    vertical_alignment: iced::alignment::Vertical::Center,
+                                    shaping: iced::widget::text::Shaping::Advanced,
+                                    wrapping: iced::widget::text::Wrapping::None,
+                                },
+                                Point::new(item_rect.x + item_rect.width - 8.0, item_y + item_h * 0.5),
+                                text_c,
+                                item_rect,
+                            );
+                        }
                     }
                 }
 
@@ -323,10 +358,39 @@ where
                     if rect.contains(pos) {
                         let local_y = (pos.y - rect.y) / scale;
                         let new_hovered = self.item_at_y(local_y).and_then(|i| {
-                            if matches!(self.items[i], AppMenuItem::Button { .. }) { Some(i) } else { None }
+                            match &self.items[i] {
+                                AppMenuItem::Button { .. } => Some(i),
+                                AppMenuItem::SubMenu { enabled, .. } if *enabled => Some(i),
+                                _ => None,
+                            }
                         });
                         if state.hovered_index != new_hovered {
+                            let now_on_submenu = new_hovered
+                                .map(|i| matches!(self.items[i], AppMenuItem::SubMenu { .. }))
+                                .unwrap_or(false);
+                            let was_submenu_idx = state.hovered_index
+                                .filter(|&i| matches!(self.items[i], AppMenuItem::SubMenu { .. }));
+
+                            // Fire close on the old submenu if we're leaving it
+                            if let Some(idx) = was_submenu_idx {
+                                if let AppMenuItem::SubMenu { on_close: Some(ref msg), .. } = self.items[idx] {
+                                    shell.publish(msg.clone());
+                                } else if let Some(ref msg) = self.on_submenu_close {
+                                    shell.publish(msg.clone());
+                                }
+                            }
+
                             state.hovered_index = new_hovered;
+
+                            if now_on_submenu {
+                                if let Some(idx) = new_hovered {
+                                    if let AppMenuItem::SubMenu { on_hover: Some(ref msg), .. } = self.items[idx] {
+                                        shell.publish(msg.clone());
+                                    } else if let Some(ref msg) = self.on_submenu_hover {
+                                        shell.publish(msg.clone());
+                                    }
+                                }
+                            }
                             return iced::event::Status::Captured;
                         }
                     } else if state.hovered_index.is_some() {
@@ -341,8 +405,22 @@ where
                     if rect.contains(pos) {
                         let local_y = (pos.y - rect.y) / scale;
                         if let Some(i) = self.item_at_y(local_y) {
-                            if let AppMenuItem::Button { message, .. } = &self.items[i] {
-                                shell.publish(message.clone());
+                            match &self.items[i] {
+                                AppMenuItem::Button { message, .. } => {
+                                    // Close all submenus when clicking a button
+                                    if let Some(ref msg) = self.on_submenu_close {
+                                        shell.publish(msg.clone());
+                                    }
+                                    shell.publish(message.clone());
+                                }
+                                AppMenuItem::SubMenu { enabled, on_hover, .. } if *enabled => {
+                                    if let Some(ref msg) = on_hover {
+                                        shell.publish(msg.clone());
+                                    } else if let Some(ref msg) = self.on_submenu_hover {
+                                        shell.publish(msg.clone());
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         return iced::event::Status::Captured;
@@ -382,8 +460,10 @@ where
             if rect.contains(pos) {
                 let local_y = (pos.y - rect.y) / scale;
                 if let Some(i) = self.item_at_y(local_y) {
-                    if matches!(self.items[i], AppMenuItem::Button { .. }) {
-                        return mouse::Interaction::Pointer;
+                    match &self.items[i] {
+                        AppMenuItem::Button { .. } => return mouse::Interaction::Pointer,
+                        AppMenuItem::SubMenu { enabled, .. } if *enabled => return mouse::Interaction::Pointer,
+                        _ => {}
                     }
                 }
                 return mouse::Interaction::default();

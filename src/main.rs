@@ -19,6 +19,11 @@ mod text_document;
 mod text_renderer;
 mod markdown_parser;
 mod text_processor;
+mod workspace;
+mod workspace_modal;
+mod file_picker;
+mod import_export;
+mod import_export_modal;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -41,12 +46,18 @@ use context_menu::ContextMenu;
 use app_menu::{AppMenu, AppMenuItem};
 use card::{Card, CardIcon};
 use positioned::Positioned;
+use workspace::{WorkspaceFile, BoardData, CardData};
+use workspace_modal::{WorkspaceModalState, WorkspaceModalMessage};
+use file_picker::{FilePickerState, FilePickerMessage, FilePickerMode};
+use import_export_modal::{ImportExportState, ImportExportMessage, IEKind, ImportExportResult};
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
 const DOT_SPACING: f32 = 30.0;
 const DOT_RADIUS: f32 = 2.0;
 const ANIMATION_DURATION_MS: f32 = 250.0;
+/// Auto-save workspace every N seconds
+const AUTO_SAVE_INTERVAL_SECS: f32 = 30.0;
 
 // Custom text editor style with visible cursor
 struct TransparentTextEditorStyle {
@@ -128,7 +139,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 }
 
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.1.6";
+const APP_VERSION: &str = "0.1.7";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
@@ -233,12 +244,31 @@ pub enum Message {
     ToggleAppMenu,
     CloseAppMenu,
     MenuFileNewBoard,
+    MenuFileNewWorkspace,
+    MenuFileOpenWorkspace,
+    MenuFileOpenRecent(String),
     MenuFileQuit,
             MenuViewResetCanvas,
             MenuViewToggleSidebar,
             MenuViewToggleTheme,
     MenuHelpAbout,
     MenuHelpKeyboardShortcuts,
+    // Recent submenu hover state
+    MenuRecentSubmenuOpen,
+    MenuRecentSubmenuClose,
+    // Workspace messages
+    WorkspaceModal(WorkspaceModalMessage),
+    WorkspaceLoaded(WorkspaceFile),
+    SaveWorkspace,
+    // Import / Export
+    MenuFileImportExport,
+    MenuImportExportSubmenuOpen,
+    MenuImportExportSubmenuClose,
+    MenuExportWorkspace,
+    MenuExportBoard,
+    MenuImportWorkspace,
+    MenuImportBoard,
+    ImportExport(ImportExportMessage),
 }
 
 struct Cards {
@@ -311,13 +341,32 @@ struct Cards {
     icon_menu: svg::Handle,
     window_size: iced::Size,
     last_tick: Instant,
+    // Workspace persistence
+    workspace_path: Option<std::path::PathBuf>,
+    workspace_modal: Option<WorkspaceModalState>,
+    /// True when the "Open Recent" submenu is hovered open
+    recent_submenu_open: bool,
+    /// True when unsaved changes exist — triggers a save at the end of update()
+    workspace_dirty: bool,
+    /// True when only the canvas position changed (debounced save)
+    canvas_position_dirty: bool,
+    /// Timestamp of the last file write, for debouncing position-only saves
+    last_save_instant: Instant,
+    /// Seconds since last save; we save every AUTO_SAVE_INTERVAL_SECS
+    time_since_last_save: f32,
+    // Import / Export modal
+    import_export_modal: Option<ImportExportState>,
+    import_export_submenu_open: bool,
 }
 
 const SIDEBAR_HIDDEN_OFFSET: f32 = -280.0;
 const BOARD_ANIMATION_DURATION_MS: f32 = 150.0; // Faster animation for board changes
 
 impl Cards {
-    fn new(config: Config) -> (Self, Task<Message>) {
+    fn new(mut config: Config) -> (Self, Task<Message>) {
+        // Clean up any recent workspaces whose files no longer exist
+        config.prune_missing_recents();
+
         let theme: Theme = config.appearance.theme.into();
         let sidebar_open = config.general.sidebar_open_on_start;
         let sidebar_offset = if sidebar_open { 0.0 } else { SIDEBAR_HIDDEN_OFFSET };
@@ -405,14 +454,56 @@ impl Cards {
             icon_menu: svg::Handle::from_memory(include_bytes!("icons/menu.svg")),
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
+            workspace_path: None,
+            workspace_modal: None,
+            recent_submenu_open: false,
+            workspace_dirty: false,
+            canvas_position_dirty: false,
+            last_save_instant: Instant::now(),
+            time_since_last_save: 0.0,
+            import_export_modal: None,
+            import_export_submenu_open: false,
         };
         cards.update_exclude_region();
+
+        // ── Workspace bootstrap ───────────────────────────────────────────────
+        // Try to load the last opened workspace from the config.
+        // If none (first launch) or the file is gone / corrupt, show the modal.
+        let last_ws = cards.config.general.last_workspace.clone();
+        let needs_modal = if let Some(ref path_str) = last_ws {
+            let path = std::path::PathBuf::from(path_str);
+            if path.exists() {
+                match WorkspaceFile::load(&path) {
+                    Ok(ws) => {
+                        cards.apply_workspace(ws, path);
+                        false
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load last workspace '{}': {}", path_str, e);
+                        true
+                    }
+                }
+            } else {
+                eprintln!("Last workspace file not found: {}", path_str);
+                true
+            }
+        } else {
+            true  // First launch — no workspace recorded
+        };
+
+        if needs_modal {
+            cards.workspace_modal = Some(WorkspaceModalState::Idle);
+        }
+
         (cards, Task::none())
     }
 
     // Helper function to convert icondata to complete SVG
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // Keep canvas blocked state in sync with modal state on every update tick.
+        self.sync_grid_blocked();
+
         match message {
             Message::ToggleSidebar => {
                 self.sidebar_open = !self.sidebar_open;
@@ -583,6 +674,7 @@ impl Cards {
                         self.canvas_animation_progress = 1.0;
                         self.canvas_animating = false;
                         self.canvas_offset = Vector::new(0.0, 0.0);
+                        self.canvas_position_dirty = true;
                     } else {
                         let t = self.canvas_animation_progress;
                         // Use ease-out cubic for smooth deceleration
@@ -647,6 +739,7 @@ impl Cards {
                                         }
 
                                         self.dot_grid.clear_cards_cache();
+                                        self.workspace_dirty = true;
                                     }
                                 }
                             }
@@ -723,9 +816,24 @@ impl Cards {
                 // Save current board's cards to keep them synced
                 self.save_current_board_cards();
 
+                // Flush any dirty flag set during Tick (e.g. animated board delete)
+                if self.workspace_dirty && self.workspace_path.is_some() {
+                    self.workspace_dirty = false;
+                    self.canvas_position_dirty = false;
+                    self.last_save_instant = Instant::now();
+                    self.save_workspace_to_file();
+                }
+
                 self.update_exclude_region();
             }
             Message::DotGridMessage(msg) => {
+                // Block all canvas interaction while any modal is open
+                if self.workspace_modal.is_some()
+                    || self.settings_open
+                    || self.confirm_delete_card_id.is_some()
+                {
+                    return Task::none();
+                }
                 match msg {
                     DotGridMessage::Pan(delta) => {
                         self.context_menu_position = None;
@@ -735,6 +843,7 @@ impl Cards {
                         self.canvas_offset.x += delta.x;
                         self.canvas_offset.y += delta.y;
                         self.dot_grid.set_offset(self.canvas_offset);
+                        self.canvas_position_dirty = true;
                     }
                     DotGridMessage::RightClick(pos) => {
                         // Check if click is within sidebar bounds
@@ -864,28 +973,25 @@ impl Cards {
                         self.dot_grid.clear_cards_cache();
                     }
                     DotGridMessage::CardResizeEnd(card_id) => {
-                        // Final snap to grid with smooth animation
                         let dot_spacing = self.dot_grid.dot_spacing();
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             let final_width = ((card.width / dot_spacing).round() * dot_spacing).max(Card::MIN_WIDTH);
                             let final_height = ((card.height / dot_spacing).round() * dot_spacing).max(Card::MIN_HEIGHT);
-
-                            // Set target size - animation will smooth the transition
                             card.target_width = final_width;
                             card.target_height = final_height;
                         }
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                     DotGridMessage::CardDrop(card_id) => {
                         let dot_spacing = self.dot_grid.dot_spacing();
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             card.is_dragging = false;
-                            // Snap to grid
                             card.target_position = Card::snap_to_grid(card.current_position, dot_spacing);
                         }
-                        // Clear selection after drag completes
                         self.selected_card_id = None;
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                     DotGridMessage::CheckboxToggle(card_id, line_index) => {
                         // Toggle checkbox in the card's markdown text
@@ -903,7 +1009,7 @@ impl Cards {
                             self.dot_grid.clear_cards_cache();
                             // Update checkbox positions after content change
                             self.dot_grid.update_card_checkbox_positions(card_id);
-                            self.save_state();
+                            self.workspace_dirty = true;
                         }
                     }
                     DotGridMessage::CardTextClick(card_id, click_pos) => {
@@ -985,6 +1091,7 @@ impl Cards {
                             self.canvas_offset.x += scroll_delta.x;
                             self.canvas_offset.y += scroll_delta.y;
                             self.dot_grid.set_offset(self.canvas_offset);
+                            self.canvas_position_dirty = true;
                         }
                     }
                     _ => {}
@@ -1004,6 +1111,7 @@ impl Cards {
                 if let Some(pos) = self.pending_card_position {
                     let card_id = self.dot_grid.add_card(pos, self.accent_color);
                     println!("Created card with id: {}, total cards: {}", card_id, self.dot_grid.cards().len());
+                    self.workspace_dirty = true;
                 }
                 self.context_menu_position = None;
                 self.pending_card_position = None;
@@ -1025,6 +1133,7 @@ impl Cards {
                 }
                 self.card_icon_menu_position = None;
                 self.card_icon_menu_card_id = None;
+                self.workspace_dirty = true;
             }
             Message::ChangeCardColor(card_id, color) => {
                 if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
@@ -1033,6 +1142,7 @@ impl Cards {
                 }
                 self.card_icon_menu_position = None;
                 self.card_icon_menu_card_id = None;
+                self.workspace_dirty = true;
             }
             Message::StartEditingCard(card_id) => {
                 // First, stop editing ALL cards
@@ -1052,6 +1162,13 @@ impl Cards {
                 // Old text_editor action - no longer used with custom editor
             }
             Message::KeyboardInput(keyboard_event) => {
+                // Block canvas keyboard shortcuts while any modal is open
+                if self.workspace_modal.is_some()
+                    || self.settings_open
+                    || self.confirm_delete_card_id.is_some()
+                {
+                    return Task::none();
+                }
                 // Check for global shortcuts first
                 if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = &keyboard_event {
                     // Ctrl+Tab to cycle forward through boards
@@ -1074,6 +1191,7 @@ impl Cards {
                             let new_cards = self.board_cards.get(&next_index).cloned().unwrap_or_default();
                             self.dot_grid.load_cards(new_cards);
                             self.dot_grid.clear_cards_cache();
+                            self.save_workspace_to_file();
                         }
                         return Task::none();
                     }
@@ -1103,6 +1221,7 @@ impl Cards {
                             let new_cards = self.board_cards.get(&prev_index).cloned().unwrap_or_default();
                             self.dot_grid.load_cards(new_cards);
                             self.dot_grid.clear_cards_cache();
+                            self.save_workspace_to_file();
                         }
                         return Task::none();
                     }
@@ -1118,6 +1237,7 @@ impl Cards {
                             // Instant recenter
                             self.canvas_offset = Vector::new(0.0, 0.0);
                             self.dot_grid.set_offset(self.canvas_offset);
+                            self.canvas_position_dirty = true;
                         }
                         return Task::none();
                     }
@@ -1151,10 +1271,9 @@ impl Cards {
                                 card.content.move_cursor_to_end();
                             }
                             self.dot_grid.clear_cards_cache();
+                            self.save_workspace_to_file();
                             return Task::none();
                         }
-
-                        // Escape while confirm dialog is open -> cancel deletion
                         if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
                             if self.confirm_delete_card_id.is_some() {
                                 self.confirm_delete_card_id = None;
@@ -1443,7 +1562,7 @@ impl Cards {
                                 };
                                 card.content.update_scroll(card_bounds);
                                 self.dot_grid.clear_cards_cache();
-                                // eprintln!("Cache cleared\n");
+                                self.workspace_dirty = true;
                             }
                             _ => {}
                         }
@@ -1469,6 +1588,7 @@ impl Cards {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                         card.content.wrap_selection("**", "**");
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1477,6 +1597,7 @@ impl Cards {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                         card.content.wrap_selection("*", "*");
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1485,6 +1606,7 @@ impl Cards {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                         card.content.wrap_selection("~~", "~~");
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1493,6 +1615,7 @@ impl Cards {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                         card.content.wrap_selection("`", "`");
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1501,6 +1624,7 @@ impl Cards {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                         card.content.wrap_selection("```\n", "\n```");
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1509,6 +1633,7 @@ impl Cards {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                         card.content.wrap_selection("# ", "");
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1517,6 +1642,7 @@ impl Cards {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                         card.content.wrap_selection("- ", "");
                         self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1536,14 +1662,13 @@ impl Cards {
                     );
                     self.selected_card_id = Some(new_card_id);
                     self.dot_grid.clear_cards_cache();
+                    self.workspace_dirty = true;
                 }
             }
             Message::DeleteCard(card_id) => {
                 if self.config.general.confirm_card_delete {
-                    // Show confirmation dialog
                     self.confirm_delete_card_id = Some(card_id);
                 } else {
-                    // Delete immediately
                     self.dot_grid.delete_card(card_id);
                     if self.selected_card_id == Some(card_id) {
                         self.selected_card_id = None;
@@ -1551,6 +1676,7 @@ impl Cards {
                     if self.editing_card_id == Some(card_id) {
                         self.editing_card_id = None;
                     }
+                    self.workspace_dirty = true;
                 }
             }
             Message::AddNewBoard => {
@@ -1571,6 +1697,7 @@ impl Cards {
                     self.board_list_animation_type = BoardAnimationType::AddBoard;
                     self.animating_board_index = Some(self.boards.len() - 1);
                 }
+                self.workspace_dirty = true;
             }
             Message::SelectBoard(index) => {
                 if index < self.boards.len() {
@@ -1605,6 +1732,9 @@ impl Cards {
 
                         // Clear the cards cache to force re-render
                         self.dot_grid.clear_cards_cache();
+
+                        // Persist changes immediately on board switch
+                        self.save_workspace_to_file();
                     }
                 }
             }
@@ -1618,6 +1748,7 @@ impl Cards {
                         self.board_list_animation_progress = 0.0;
                         self.board_list_animation_type = BoardAnimationType::DeleteBoard;
                         self.animating_board_index = Some(index);
+                        self.workspace_dirty = true;
                     } else {
                         // No animation, delete immediately
                         self.boards.remove(index);
@@ -1628,6 +1759,7 @@ impl Cards {
                         } else if self.active_board_index > index {
                             self.active_board_index = self.active_board_index.saturating_sub(1);
                         }
+                        self.workspace_dirty = true;
                     }
                 }
             }
@@ -1647,6 +1779,7 @@ impl Cards {
                 if let Some(index) = self.editing_board_index {
                     if index < self.boards.len() && !self.board_rename_value.trim().is_empty() {
                         self.boards[index] = self.board_rename_value.trim().to_string();
+                        self.workspace_dirty = true;
                     }
                 }
                 self.editing_board_index = None;
@@ -1696,6 +1829,7 @@ impl Cards {
                     if self.editing_card_id == Some(card_id) {
                         self.editing_card_id = None;
                     }
+                    self.workspace_dirty = true;
                 }
             }
             Message::CancelDeleteCard => {
@@ -1724,6 +1858,7 @@ impl Cards {
                 }
             }
             Message::CloseAppMenu => {
+                self.recent_submenu_open = false;
                 if self.app_menu_open {
                     if self.config.general.enable_animations {
                         self.app_menu_animating = true;
@@ -1747,8 +1882,10 @@ impl Cards {
                     self.board_list_animation_type = BoardAnimationType::AddBoard;
                     self.animating_board_index = Some(self.boards.len() - 1);
                 }
+                self.workspace_dirty = true;
             }
             Message::MenuFileQuit => {
+                self.save_workspace_to_file();
                 return iced::exit();
             }
             Message::MenuViewResetCanvas => {
@@ -1762,6 +1899,7 @@ impl Cards {
                     self.canvas_offset = Vector::new(0.0, 0.0);
                     self.dot_grid.set_offset(Vector::new(0.0, 0.0));
                     self.dot_grid.clear_cards_cache();
+                    self.canvas_position_dirty = true;
                 }
             }
             Message::MenuViewToggleSidebar => {
@@ -1821,7 +1959,244 @@ impl Cards {
                     self.settings_animation_progress = 0.0;
                 }
             }
+
+            // ── Workspace messages ────────────────────────────────────────────
+            Message::WorkspaceModal(modal_msg) => {
+                match modal_msg {
+                    WorkspaceModalMessage::Noop => {}
+                    WorkspaceModalMessage::ChooseNew => {
+                        let default_dir = WorkspaceFile::default_dir()
+                            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name: String::new(),
+                            picker: None,
+                            save_dir: default_dir,
+                            is_import: false,
+                        });
+                    }
+                    WorkspaceModalMessage::ChooseOpen => {
+                        let start_dir = WorkspaceFile::default_dir()
+                            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                        let picker = FilePickerState::new(
+                            FilePickerMode::Open { filter_ext: "cards".to_string() },
+                            start_dir,
+                            "Open Workspace",
+                        );
+                        self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                    }
+                    WorkspaceModalMessage::ChooseImport => {
+                        let start_dir = WorkspaceFile::default_dir()
+                            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                        // Empty filter = show all files (json, cards-workspace, etc.)
+                        let picker = FilePickerState::new(
+                            FilePickerMode::Open { filter_ext: String::new() },
+                            start_dir,
+                            "Import Workspace",
+                        );
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                    }
+                    WorkspaceModalMessage::NewNameInput(name) => {
+                        if let Some(WorkspaceModalState::CreatingNew { name: ref mut n, .. }) = self.workspace_modal {
+                            *n = name;
+                        }
+                    }
+                    WorkspaceModalMessage::BrowseSaveDir => {
+                        let browse_data = if let Some(WorkspaceModalState::CreatingNew { ref save_dir, ref name, .. }) = self.workspace_modal {
+                            Some((save_dir.clone(), name.clone()))
+                        } else { None };
+                        if let Some((save_dir, name)) = browse_data {
+                            let new_picker = FilePickerState::new(
+                                FilePickerMode::Save { default_name: format!("{}.cards", name.replace(' ', "_")) },
+                                save_dir,
+                                "Choose Save Location",
+                            );
+                            if let Some(WorkspaceModalState::CreatingNew { ref mut picker, .. }) = self.workspace_modal {
+                                *picker = Some(new_picker);
+                            }
+                        }
+                    }
+                    WorkspaceModalMessage::ConfirmNew => {
+                        if let Some(WorkspaceModalState::CreatingNew { ref name, ref save_dir, is_import, .. }) = self.workspace_modal.clone() {
+                            let trimmed = name.trim().to_string();
+                            if !trimmed.is_empty() {
+                                let safe_name: String = trimmed.chars()
+                                    .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+                                    .collect();
+                                let file_name = format!("{}.cards", safe_name.replace(' ', "_"));
+                                let path = save_dir.join(&file_name);
+                                // If this was opened after an import, save the current
+                                // in-memory boards instead of creating an empty workspace.
+                                let ws = if is_import {
+                                    let mut collected = self.collect_workspace();
+                                    collected.name = trimmed.clone();
+                                    collected
+                                } else {
+                                    WorkspaceFile::new_empty(&trimmed)
+                                };
+                                match ws.save(&path) {
+                                    Ok(()) => {
+                                        if is_import {
+                                            // Data already in memory — just record the path
+                                            self.workspace_path = Some(path.clone());
+                                            if let Err(e) = self.config.push_recent_workspace(path.to_string_lossy().to_string()) {
+                                                eprintln!("Failed to save recent workspace: {}", e);
+                                            }
+                                            self.workspace_modal = None;
+                                        } else {
+                                            self.apply_workspace(ws, path);
+                                            self.workspace_modal = None;
+                                        }
+                                    }
+                                    Err(e) => eprintln!("Failed to create workspace: {}", e),
+                                }
+                            }
+                        }
+                    }
+                    WorkspaceModalMessage::CancelNew => {
+                        if self.workspace_path.is_some() {
+                            self.workspace_modal = None;
+                        } else {
+                            self.workspace_modal = Some(WorkspaceModalState::Idle);
+                        }
+                    }
+                    WorkspaceModalMessage::FilePicker(fp_msg) => {
+                        self.handle_file_picker_message(fp_msg);
+                    }
+                }
+            }
+
+            Message::MenuFileNewWorkspace => {
+                self.app_menu_open = false;
+                self.recent_submenu_open = false;
+                let default_dir = WorkspaceFile::default_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                    name: String::new(),
+                    picker: None,
+                    save_dir: default_dir,
+                    is_import: false,
+                });
+            }
+
+            Message::MenuFileOpenWorkspace => {
+                self.app_menu_open = false;
+                self.recent_submenu_open = false;
+                let start_dir = WorkspaceFile::default_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                let picker = FilePickerState::new(
+                    FilePickerMode::Open { filter_ext: "cards".to_string() },
+                    start_dir,
+                    "Open Workspace",
+                );
+                self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+            }
+
+            Message::MenuFileOpenRecent(path_str) => {
+                self.app_menu_open = false;
+                self.recent_submenu_open = false;
+                let path = std::path::PathBuf::from(&path_str);
+                match WorkspaceFile::load(&path) {
+                    Ok(ws) => {
+                        self.apply_workspace(ws, path);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to open recent workspace '{}': {}", path_str, e);
+                        // Remove the broken entry from recents
+                        self.config.general.recent_workspaces.retain(|p| p != &path_str);
+                        let _ = self.config.save();
+                    }
+                }
+            }
+
+            Message::MenuRecentSubmenuOpen => {
+                self.recent_submenu_open = true;
+            }
+
+            Message::MenuRecentSubmenuClose => {
+                self.recent_submenu_open = false;
+            }
+
+            Message::WorkspaceLoaded(ws) => {
+                let _ = ws; // reserved for async use
+            }
+
+            Message::SaveWorkspace => {
+                self.workspace_dirty = true;
+            }
+
+            // ── Import / Export ───────────────────────────────────────────────
+
+            Message::MenuFileImportExport => {
+                // Toggle the submenu open/closed when the main item is clicked
+                self.import_export_submenu_open = !self.import_export_submenu_open;
+            }
+            Message::MenuImportExportSubmenuOpen => {
+                self.import_export_submenu_open = true;
+            }
+            Message::MenuImportExportSubmenuClose => {
+                self.import_export_submenu_open = false;
+            }
+
+            Message::MenuExportWorkspace => {
+                self.app_menu_open = false;
+                self.import_export_submenu_open = false;
+                let dir = WorkspaceFile::default_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                let ws_name = self.workspace_path
+                    .as_ref()
+                    .and_then(|p| p.file_stem())
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "workspace".to_string());
+                self.import_export_modal = Some(ImportExportState::new_export_workspace(&ws_name, dir));
+            }
+            Message::MenuExportBoard => {
+                self.app_menu_open = false;
+                self.import_export_submenu_open = false;
+                let dir = WorkspaceFile::default_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                let board_name = self.boards.get(self.active_board_index)
+                    .cloned()
+                    .unwrap_or_else(|| "board".to_string());
+                self.import_export_modal = Some(ImportExportState::new_export_board(&board_name, dir));
+            }
+            Message::MenuImportWorkspace => {
+                self.app_menu_open = false;
+                self.import_export_submenu_open = false;
+                let dir = WorkspaceFile::default_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                self.import_export_modal = Some(ImportExportState::new_import_workspace(dir));
+            }
+            Message::MenuImportBoard => {
+                self.app_menu_open = false;
+                self.import_export_submenu_open = false;
+                let dir = WorkspaceFile::default_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                self.import_export_modal = Some(ImportExportState::new_import_board(dir));
+            }
+
+            Message::ImportExport(ie_msg) => {
+                self.handle_import_export_message(ie_msg);
+            }
         }
+
+        // Persist any state-changing action immediately
+        if self.workspace_dirty && self.workspace_path.is_some() {
+            self.workspace_dirty = false;
+            self.canvas_position_dirty = false; // absorbed by full save
+            self.last_save_instant = Instant::now();
+            self.save_workspace_to_file();
+        } else if self.canvas_position_dirty && self.workspace_path.is_some() {
+            // Debounce position-only saves: write at most once per second
+            if self.last_save_instant.elapsed() >= Duration::from_secs(1) {
+                self.canvas_position_dirty = false;
+                self.last_save_instant = Instant::now();
+                self.save_workspace_to_file();
+            }
+        }
+
+        // Sync blocked state after all state changes so it's current for next frame.
+        self.sync_grid_blocked();
+
         Task::none()
     }
 
@@ -1829,6 +2204,589 @@ impl Cards {
     fn save_current_board_cards(&mut self) {
         let current_cards = self.dot_grid.cards().iter().cloned().collect();
         self.board_cards.insert(self.active_board_index, current_cards);
+    }
+
+    // ── Workspace persistence ──────────────────────────────────────────────
+
+    /// Load a `WorkspaceFile` into the application state.
+    // ── File picker message dispatch ───────────────────────────────────────
+
+    fn handle_file_picker_message(&mut self, msg: FilePickerMessage) {
+        match self.workspace_modal.clone() {
+            // ── Save-picker inside "Creating New" ─────────────────────────
+            Some(WorkspaceModalState::CreatingNew { name, save_dir, picker: Some(mut fp), is_import }) => {
+                match msg {
+                    FilePickerMessage::Cancel => {
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name, picker: None, save_dir, is_import,
+                        });
+                    }
+                    FilePickerMessage::GoUp => {
+                        fp.go_up();
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name, picker: Some(fp), save_dir, is_import,
+                        });
+                    }
+                    FilePickerMessage::EnterDir(path) => {
+                        fp.enter(path);
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name, picker: Some(fp), save_dir, is_import,
+                        });
+                    }
+                    FilePickerMessage::FileNameInput(v) => {
+                        fp.file_name = v;
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name, picker: Some(fp), save_dir, is_import,
+                        });
+                    }
+                    FilePickerMessage::SelectFile(fname) => {
+                        fp.file_name = fname;
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name, picker: Some(fp), save_dir, is_import,
+                        });
+                    }
+                    FilePickerMessage::GoToPlace(path) => {
+                        fp.enter(path);
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name, picker: Some(fp), save_dir, is_import,
+                        });
+                    }
+                    FilePickerMessage::ToggleDrive(path) => {
+                        if fp.expanded_drives.contains(&path) {
+                            fp.expanded_drives.remove(&path);
+                        } else {
+                            fp.expanded_drives.insert(path);
+                        }
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name, picker: Some(fp), save_dir, is_import,
+                        });
+                    }
+                    FilePickerMessage::Extra(_) => {}
+                    FilePickerMessage::Confirm => {
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name,
+                            picker: None,
+                            save_dir: fp.current_dir.clone(),
+                            is_import,
+                        });
+                    }
+                }
+            }
+
+            // ── Open-picker inside "Opening Existing" ─────────────────────
+            Some(WorkspaceModalState::OpeningExisting { mut picker }) => {
+                match msg {
+                    FilePickerMessage::Cancel => {
+                        if self.workspace_path.is_some() {
+                            self.workspace_modal = None;
+                        } else {
+                            self.workspace_modal = Some(WorkspaceModalState::Idle);
+                        }
+                    }
+                    FilePickerMessage::GoUp => {
+                        picker.go_up();
+                        self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                    }
+                    FilePickerMessage::EnterDir(path) => {
+                        picker.enter(path);
+                        self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                    }
+                    FilePickerMessage::FileNameInput(v) => {
+                        picker.file_name = v;
+                        self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                    }
+                    FilePickerMessage::SelectFile(fname) => {
+                        let path = picker.current_dir.join(&fname);
+                        match WorkspaceFile::load(&path) {
+                            Ok(ws) => {
+                                self.apply_workspace(ws, path);
+                                self.workspace_modal = None;
+                            }
+                            Err(e) => {
+                                picker.file_name = fname;
+                                picker.error = Some(format!("Cannot open: {}", e));
+                                self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                            }
+                        }
+                    }
+                    FilePickerMessage::GoToPlace(path) => {
+                        picker.enter(path);
+                        self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                    }
+                    FilePickerMessage::ToggleDrive(path) => {
+                        if picker.expanded_drives.contains(&path) {
+                            picker.expanded_drives.remove(&path);
+                        } else {
+                            picker.expanded_drives.insert(path);
+                        }
+                        self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                    }
+                    FilePickerMessage::Extra(_) => {}
+                    FilePickerMessage::Confirm => {
+                        let path = picker.current_dir.join(&picker.file_name);
+                        match WorkspaceFile::load(&path) {
+                            Ok(ws) => {
+                                self.apply_workspace(ws, path);
+                                self.workspace_modal = None;
+                            }
+                            Err(e) => {
+                                picker.error = Some(format!("Cannot open: {}", e));
+                                self.workspace_modal = Some(WorkspaceModalState::OpeningExisting { picker });
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Import-picker inside "Importing Workspace" ─────────────────
+            Some(WorkspaceModalState::ImportingWorkspace { mut picker }) => {
+                match msg {
+                    FilePickerMessage::Cancel => {
+                        // Return to welcome screen (import is only accessible from Idle)
+                        self.workspace_modal = if self.workspace_path.is_some() {
+                            None
+                        } else {
+                            Some(WorkspaceModalState::Idle)
+                        };
+                    }
+                    FilePickerMessage::GoUp => {
+                        picker.go_up();
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                    }
+                    FilePickerMessage::EnterDir(path) => {
+                        picker.enter(path);
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                    }
+                    FilePickerMessage::FileNameInput(v) => {
+                        picker.file_name = v;
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                    }
+                    FilePickerMessage::SelectFile(fname) => {
+                        let path = picker.current_dir.join(&fname);
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                        self.do_import_workspace_from_welcome(path);
+                    }
+                    FilePickerMessage::GoToPlace(path) => {
+                        picker.enter(path);
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                    }
+                    FilePickerMessage::ToggleDrive(path) => {
+                        if picker.expanded_drives.contains(&path) {
+                            picker.expanded_drives.remove(&path);
+                        } else {
+                            picker.expanded_drives.insert(path);
+                        }
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                    }
+                    FilePickerMessage::Extra(_) => {}
+                    FilePickerMessage::Confirm => {
+                        let path = picker.current_dir.join(&picker.file_name);
+                        self.workspace_modal = Some(WorkspaceModalState::ImportingWorkspace { picker });
+                        self.do_import_workspace_from_welcome(path);
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    /// Import a workspace from the welcome-screen import picker.
+    /// On success: loads the workspace and closes the modal.
+    /// On failure: shows error in the picker.
+    fn do_import_workspace_from_welcome(&mut self, path: std::path::PathBuf) {
+        use import_export::import_workspace;
+        match import_workspace(&path) {
+            Ok(r) => {
+                let warnings = r.warnings.clone();
+                let ws_name = r.workspace.name.clone();
+                self.apply_workspace(r.workspace, path.clone());
+                self.workspace_path = None;
+                self.workspace_modal = None;
+                // Open Save As dialog so the imported data gets a real .cards file
+                let default_dir = WorkspaceFile::default_dir()
+                    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                    name: ws_name,
+                    picker: None,
+                    save_dir: default_dir,
+                    is_import: true,
+                });
+                if !warnings.is_empty() {
+                    eprintln!("Import warnings: {:?}", warnings);
+                }
+            }
+            Err(e) => {
+                if let Some(WorkspaceModalState::ImportingWorkspace { ref mut picker }) = self.workspace_modal {
+                    picker.error = Some(format!("Import failed: {}", e));
+                }
+            }
+        }
+    }
+
+    fn apply_workspace(&mut self, ws: WorkspaceFile, path: std::path::PathBuf) {
+        // Reset board/card state
+        self.boards.clear();
+        self.board_cards.clear();
+        self.active_board_index = 0;
+        self.editing_card_id = None;
+        self.selected_card_id = None;
+        self.card_icon_menu_position = None;
+        self.card_icon_menu_card_id = None;
+
+        // Find the highest existing card id so the DotGrid counter starts above it
+        let mut max_id: usize = 0;
+
+        for (board_idx, board) in ws.boards.iter().enumerate() {
+            self.boards.push(board.name.clone());
+
+            let mut cards: Vec<crate::card::Card> = Vec::new();
+            for cd in &board.cards {
+                if cd.id > max_id {
+                    max_id = cd.id;
+                }
+                let mut card = crate::card::Card::new(
+                    cd.id,
+                    iced::Point::new(cd.x, cd.y),
+                );
+                card.content = crate::custom_text_editor::CustomTextEditor::with_text(&cd.content);
+                card.content.set_font(self.dot_grid.font(), self.dot_grid.font_size());
+                card.icon = cd.to_icon();
+                card.color = cd.to_color();
+                card.width = cd.width;
+                card.height = cd.height;
+                card.target_width = cd.width;
+                card.target_height = cd.height;
+                card.target_position = card.current_position;
+                cards.push(card);
+            }
+            self.board_cards.insert(board_idx, cards);
+        }
+
+        // Ensure at least one board always exists
+        if self.boards.is_empty() {
+            self.boards.push("Board 1".to_string());
+            self.board_cards.insert(0, Vec::new());
+        }
+
+        // Seed the DotGrid id counter so new cards won't collide
+        self.dot_grid.set_next_card_id(max_id + 1);
+
+        // Restore the last-active board (clamped in case boards were removed)
+        let restored_board = ws.active_board_index.min(self.boards.len().saturating_sub(1));
+        self.active_board_index = restored_board;
+
+        // Load the restored board's cards into the canvas
+        let active_cards = self.board_cards.get(&restored_board).cloned().unwrap_or_default();
+        self.dot_grid.load_cards(active_cards);
+        self.dot_grid.clear_cards_cache();
+
+        // Restore canvas scroll position
+        self.canvas_offset = Vector::new(ws.canvas_offset_x, ws.canvas_offset_y);
+        self.dot_grid.set_offset(self.canvas_offset);
+
+        self.workspace_path = Some(path.clone());
+        // Record in recents (also updates last_workspace)
+        if let Err(e) = self.config.push_recent_workspace(path.to_string_lossy().to_string()) {
+            eprintln!("Failed to save recent workspace: {}", e);
+        }
+    }
+
+    /// Collect the current app state into a serialisable `WorkspaceFile`.
+    fn collect_workspace(&mut self) -> WorkspaceFile {
+        // Flush the active board first
+        self.save_current_board_cards();
+
+        let boards: Vec<BoardData> = self.boards
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| {
+                let cards = self.board_cards
+                    .get(&idx)
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(CardData::from_card)
+                    .collect();
+                BoardData { name: name.clone(), cards }
+            })
+            .collect();
+
+        let name = self.workspace_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Workspace".to_string());
+
+        WorkspaceFile {
+            version: 1,
+            name,
+            boards,
+            active_board_index: self.active_board_index,
+            canvas_offset_x: self.canvas_offset.x,
+            canvas_offset_y: self.canvas_offset.y,
+        }
+    }
+
+    /// Save the current workspace to its file (if one is set).
+    fn save_workspace_to_file(&mut self) {
+        let ws = self.collect_workspace();
+        if let Some(ref path) = self.workspace_path.clone() {
+            if let Err(e) = ws.save(path) {
+                eprintln!("Auto-save failed: {}", e);
+            } else if self.config.general.debug_mode {
+                println!("DEBUG: Workspace auto-saved to {:?}", path);
+            }
+        }
+    }
+
+    fn handle_import_export_message(&mut self, msg: ImportExportMessage) {
+        let Some(state) = self.import_export_modal.as_mut() else { return };
+
+        match msg {
+            ImportExportMessage::Cancel => {
+                self.import_export_modal = None;
+            }
+
+            ImportExportMessage::DismissResult => {
+                // On success close the whole modal; on failure return to picker
+                let success = self.import_export_modal
+                    .as_ref()
+                    .and_then(|s| s.result.as_ref())
+                    .map(|r| r.success)
+                    .unwrap_or(false);
+                if success {
+                    self.import_export_modal = None;
+                } else if let Some(s) = self.import_export_modal.as_mut() {
+                    s.result = None;
+                }
+            }
+
+            ImportExportMessage::SetFormat(fmt) => {
+                state.format = fmt;
+            }
+
+            ImportExportMessage::Picker(fp_msg) => {
+                match fp_msg {
+                    FilePickerMessage::Cancel => {
+                        self.import_export_modal = None;
+                    }
+                    FilePickerMessage::GoUp => {
+                        state.picker.go_up();
+                    }
+                    FilePickerMessage::EnterDir(p) => {
+                        state.picker.enter(p);
+                    }
+                    FilePickerMessage::GoToPlace(p) => {
+                        state.picker.enter(p);
+                    }
+                    FilePickerMessage::ToggleDrive(p) => {
+                        if state.picker.expanded_drives.contains(&p) {
+                            state.picker.expanded_drives.remove(&p);
+                        } else {
+                            state.picker.expanded_drives.insert(p);
+                        }
+                    }
+                    FilePickerMessage::FileNameInput(v) => {
+                        state.picker.file_name = v;
+                    }
+                    FilePickerMessage::SelectFile(name) => {
+                        state.picker.file_name = name.clone();
+                        // In import mode, selecting a file immediately triggers confirm
+                        if !state.kind.is_export() {
+                            let path = state.picker.current_dir.join(&name);
+                            self.execute_import(path);
+                            return;
+                        }
+                    }
+                    FilePickerMessage::Confirm => {
+                        // In export Save mode the "Select Folder" / "Select" button fires Confirm.
+                        // Treat it the same as ImportExportMessage::Confirm.
+                        let Some(ie_state) = self.import_export_modal.clone() else { return };
+                        if ie_state.kind.is_export() {
+                            if let Some(path) = ie_state.resolved_path() {
+                                self.execute_export(path, ie_state.format);
+                            } else if let Some(s) = self.import_export_modal.as_mut() {
+                                s.picker.error = Some("Please enter a file name".into());
+                            }
+                        }
+                    }
+                    FilePickerMessage::Extra(_) => {
+                        // Extra is mapped to SetFormat before reaching here (in the view .map()),
+                        // so this arm should never fire. Ignore if it somehow does.
+                    }
+                }
+            }
+
+            ImportExportMessage::Confirm => {
+                let Some(state) = self.import_export_modal.clone() else { return };
+                if state.kind.is_export() {
+                    let Some(path) = state.resolved_path() else {
+                        if let Some(s) = self.import_export_modal.as_mut() {
+                            s.picker.error = Some("Please enter a file name".into());
+                        }
+                        return;
+                    };
+                    self.execute_export(path, state.format);
+                } else {
+                    let Some(path) = state.resolved_path() else {
+                        if let Some(s) = self.import_export_modal.as_mut() {
+                            s.picker.error = Some("Please select a file".into());
+                        }
+                        return;
+                    };
+                    self.execute_import(path);
+                }
+            }
+        }
+    }
+
+    fn execute_export(&mut self, path: std::path::PathBuf, fmt: import_export::ExportFormat) {
+        use import_export::{export_workspace, export_board};
+
+        let kind = self.import_export_modal.as_ref().map(|s| s.kind.clone());
+        let result = match kind {
+            Some(IEKind::ExportWorkspace) => {
+                let ws = self.collect_workspace();
+                export_workspace(&ws, &path, fmt)
+            }
+            Some(IEKind::ExportBoard) => {
+                self.save_current_board_cards();
+                let cards = self.board_cards.get(&self.active_board_index)
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(CardData::from_card)
+                    .collect();
+                let board_name = self.boards.get(self.active_board_index)
+                    .cloned()
+                    .unwrap_or_else(|| "Board".to_string());
+                let board = BoardData { name: board_name, cards };
+                export_board(&board, &path, fmt)
+            }
+            _ => return,
+        };
+
+        let ie_result = match result {
+            Ok(()) => ImportExportResult {
+                success: true,
+                message: format!("Exported successfully to {}", path.display()),
+                warnings: Vec::new(),
+            },
+            Err(e) => ImportExportResult {
+                success: false,
+                message: format!("Export failed: {}", e),
+                warnings: Vec::new(),
+            },
+        };
+
+        if let Some(s) = self.import_export_modal.as_mut() {
+            s.result = Some(ie_result);
+        }
+    }
+
+    fn execute_import(&mut self, path: std::path::PathBuf) {
+        use import_export::{import_workspace, import_board};
+
+        let kind = self.import_export_modal.as_ref().map(|s| s.kind.clone());
+
+        match kind {
+            Some(IEKind::ImportWorkspace) => {
+                match import_workspace(&path) {
+                    Ok(r) => {
+                        let warnings = r.warnings.clone();
+                        let ws_name = r.workspace.name.clone();
+
+                        // Load the workspace data into the app state.
+                        // We pass the import source path temporarily; apply_workspace will
+                        // set workspace_path to it, but we clear it right after so the
+                        // app knows there is no persisted .cards file yet.
+                        self.apply_workspace(r.workspace, path.clone());
+                        self.workspace_path = None;
+
+                        // Close the import modal
+                        self.import_export_modal = None;
+
+                        // Immediately open the "Save workspace as…" dialog so the imported
+                        // data gets persisted to a real .cards file.
+                        let default_dir = WorkspaceFile::default_dir()
+                            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
+                        self.workspace_modal = Some(WorkspaceModalState::CreatingNew {
+                            name: ws_name,
+                            picker: None,
+                            save_dir: default_dir,
+                            is_import: true,
+                        });
+
+                        if !warnings.is_empty() {
+                            eprintln!("Import warnings: {:?}", warnings);
+                        }
+                    }
+                    Err(e) => {
+                        let ie_result = ImportExportResult {
+                            success: false,
+                            message: format!("Import failed: {}", e),
+                            warnings: Vec::new(),
+                        };
+                        if let Some(s) = self.import_export_modal.as_mut() {
+                            s.result = Some(ie_result);
+                        }
+                    }
+                }
+            }
+            Some(IEKind::ImportBoard) => {
+                match import_board(&path) {
+                    Ok(r) => {
+                        let warnings = r.warnings.clone();
+                        // Add the imported board at the end
+                        let new_idx = self.boards.len();
+                        self.boards.push(r.board.name.clone());
+                        // Re-key card IDs to avoid collisions
+                        let mut next_id = self.dot_grid.next_card_id();
+                        let mut cards: Vec<crate::card::Card> = Vec::new();
+                        for mut cd in r.board.cards {
+                            cd.id = next_id;
+                            next_id += 1;
+                            let mut card = crate::card::Card::new(
+                                cd.id,
+                                iced::Point::new(cd.x, cd.y),
+                            );
+                            card.width = cd.width;
+                            card.height = cd.height;
+                            card.content.set_text(cd.content.clone());
+                            card.color = cd.to_color();
+                            card.icon  = cd.to_icon();
+                            cards.push(card);
+                        }
+                        self.dot_grid.set_next_card_id(next_id);
+                        self.board_cards.insert(new_idx, cards);
+                        self.workspace_dirty = true;
+                        let ie_result = ImportExportResult {
+                            success: true,
+                            message: format!(
+                                "Board \"{}\" imported successfully",
+                                r.board.name
+                            ),
+                            warnings,
+                        };
+                        if let Some(s) = self.import_export_modal.as_mut() {
+                            s.result = Some(ie_result);
+                        }
+                    }
+                    Err(e) => {
+                        let ie_result = ImportExportResult {
+                            success: false,
+                            message: format!("Import failed: {}", e),
+                            warnings: Vec::new(),
+                        };
+                        if let Some(s) = self.import_export_modal.as_mut() {
+                            s.result = Some(ie_result);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Toggle a checkbox at the specified line index in markdown text
@@ -1913,11 +2871,6 @@ impl Cards {
         result
     }
 
-    /// Save application state (placeholder for future persistence)
-    fn save_state(&self) {
-        // TODO: Implement state persistence if needed
-    }
-
     fn subscription(&self) -> Subscription<Message> {
         // Always tick for card animations
         let tick = time::every(Duration::from_millis(16)).map(Message::Tick);
@@ -1940,7 +2893,7 @@ impl Cards {
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::CloseRequested) => {
-                    std::process::exit(0);
+                    Some(Message::MenuFileQuit)
                 }
                 Event::Keyboard(keyboard_event) => Some(Message::KeyboardInput(keyboard_event)),
                 _ => None,
@@ -2630,8 +3583,19 @@ impl Cards {
                 crate::theme::Theme::Dark => "Switch to Light Mode",
             };
 
+            let recents = self.config.general.recent_workspaces.clone();
+            let has_recents = !recents.is_empty();
+
             let items: Vec<AppMenuItem<Message>> = vec![
                 AppMenuItem::Label("FILE".to_string()),
+                AppMenuItem::Button { label: "New Workspace".to_string(),    message: Message::MenuFileNewWorkspace },
+                AppMenuItem::Button { label: "Open Workspace…".to_string(),  message: Message::MenuFileOpenWorkspace },
+                AppMenuItem::SubMenu { label: "Open Recent".to_string(),     enabled: has_recents,
+                    on_hover: Some(Message::MenuRecentSubmenuOpen),
+                    on_close: Some(Message::MenuRecentSubmenuClose) },
+                AppMenuItem::SubMenu { label: "Import / Export".to_string(), enabled: true,
+                    on_hover: Some(Message::MenuImportExportSubmenuOpen),
+                    on_close: Some(Message::MenuImportExportSubmenuClose) },
                 AppMenuItem::Button { label: "New Board".to_string(),        message: Message::MenuFileNewBoard },
                 AppMenuItem::Button { label: "Quit".to_string(),             message: Message::MenuFileQuit },
                 AppMenuItem::Separator,
@@ -2649,7 +3613,7 @@ impl Cards {
             let menu_bg = self.theme.button_background();
 
             let app_menu: Element<Message> = AppMenu::new(items, menu_pos)
-                .width(SIDEBAR_WIDTH - 16.0)   // inset 8px each side from sidebar edges
+                .width(SIDEBAR_WIDTH - 16.0)
                 .background(menu_bg)
                 .border_color(self.theme.button_border())
                 .text_color(self.theme.button_text())
@@ -2661,12 +3625,79 @@ impl Cards {
                 .into();
 
             view = Overlay::new(view, app_menu).into();
+
+            // Open Recent submenu — shown to the right of the main menu when hovered
+            if self.recent_submenu_open && has_recents {
+                // Position: right of main menu, aligned with the "Open Recent" row
+                // Main menu is at sidebar_screen_x + 8, width = SIDEBAR_WIDTH-16
+                // "Open Recent" is item index 3 (0-based): Label + New WS + Open WS = 3 rows before
+                let item_h = 32.0;
+                let label_h = 26.0;
+                let submenu_x = menu_pos.x + (SIDEBAR_WIDTH - 16.0) + 4.0;
+                // y: top padding 6 + Label(26) + Button(32) + Button(32) + align to this item
+                let submenu_y = menu_pos.y + 6.0 + label_h + item_h + item_h;
+
+                let submenu_items: Vec<AppMenuItem<Message>> = recents.iter()
+                    .map(|p| {
+                        let label = std::path::Path::new(p)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| p.clone());
+                        AppMenuItem::Button { label, message: Message::MenuFileOpenRecent(p.clone()) }
+                    })
+                    .collect();
+
+                let submenu: Element<Message> = AppMenu::new(submenu_items, Point::new(submenu_x, submenu_y))
+                    .width(200.0)
+                    .background(menu_bg)
+                    .border_color(self.theme.button_border())
+                    .text_color(self.theme.button_text())
+                    .separator_color(self.theme.accent_glow_from(self.accent_color))
+                    .hover_color(accent_bg)
+                    .shadow_color(sidebar_shadow)
+                    .on_close(Message::MenuRecentSubmenuClose)
+                    .animation_progress(1.0)
+                    .into();
+
+                view = Overlay::new(view, submenu).into();
+            }
+
+            // Import / Export submenu
+            if self.import_export_submenu_open {
+                let item_h = 32.0;
+                let label_h = 26.0;
+                let submenu_x = menu_pos.x + (SIDEBAR_WIDTH - 16.0) + 4.0;
+                // "Import / Export" is 4th item (index 3): Label(26) + 3×Button(32) = 122
+                let submenu_y = menu_pos.y + 6.0 + label_h + item_h * 3.0;
+
+                let ie_items: Vec<AppMenuItem<Message>> = vec![
+                    AppMenuItem::Button { label: "Import Workspace".to_string(), message: Message::MenuImportWorkspace },
+                    AppMenuItem::Button { label: "Export Workspace".to_string(), message: Message::MenuExportWorkspace },
+                    AppMenuItem::Separator,
+                    AppMenuItem::Button { label: "Import Board".to_string(), message: Message::MenuImportBoard },
+                    AppMenuItem::Button { label: "Export Board".to_string(), message: Message::MenuExportBoard },
+                ];
+
+                let ie_submenu: Element<Message> = AppMenu::new(ie_items, Point::new(submenu_x, submenu_y))
+                    .width(190.0)
+                    .background(menu_bg)
+                    .border_color(self.theme.button_border())
+                    .text_color(self.theme.button_text())
+                    .separator_color(self.theme.accent_glow_from(self.accent_color))
+                    .hover_color(accent_bg)
+                    .shadow_color(sidebar_shadow)
+                    .on_close(Message::MenuImportExportSubmenuClose)
+                    .animation_progress(1.0)
+                    .into();
+
+                view = Overlay::new(view, ie_submenu).into();
+            }
         }
 
         // Add delete confirmation dialog (on top of sidebar, below settings)
         if self.confirm_delete_card_id.is_some() {
             let confirm_dialog = self.build_delete_confirm_dialog();
-            view = Overlay::new(view, confirm_dialog).into();
+            view = Overlay::new(view, confirm_dialog).modal().into();
         }
 
         // Add settings modal LAST (on top of everything)
@@ -2701,12 +3732,11 @@ impl Cards {
             .on_close(|| Message::CloseSettings)
             .into();
 
-            view = Overlay::new(view, settings_modal).into();
+            view = Overlay::new(view, settings_modal).modal().into();
         }
 
         // Add theme transition overlay - diagonal wipe animation
-        if self.theme_transitioning {
-            let transition_progress = self.theme_transition_progress;
+        if self.theme_transitioning {            let transition_progress = self.theme_transition_progress;
 
             // Apply cubic bezier easing (ease-in-out) for smooth start and end
             // Using cubic bezier curve for smooth acceleration and deceleration
@@ -2844,7 +3874,36 @@ impl Cards {
             .width(Length::Fill)
             .height(Length::Fill);
 
-            view = Overlay::new(view, wipe_overlay).into();
+            view = Overlay::new(view, wipe_overlay).modal().into();
+        }
+
+        // Workspace modal — rendered absolutely last (topmost layer)
+        if let Some(ref modal_state) = self.workspace_modal {
+            let modal_overlay = workspace_modal::view(modal_state, self.theme, self.accent_color)
+                .map(Message::WorkspaceModal);
+            let backdrop_msg = match modal_state {
+                WorkspaceModalState::OpeningExisting { .. } |
+                WorkspaceModalState::ImportingWorkspace { .. } => {
+                    Message::WorkspaceModal(workspace_modal::WorkspaceModalMessage::FilePicker(
+                        crate::file_picker::FilePickerMessage::Cancel
+                    ))
+                }
+                _ => Message::WorkspaceModal(workspace_modal::WorkspaceModalMessage::CancelNew),
+            };
+            view = Overlay::new(view, modal_overlay)
+                .modal()
+                .on_backdrop_press(backdrop_msg)
+                .into();
+        }
+
+        // Import / Export modal — above workspace modal
+        if let Some(ref ie_state) = self.import_export_modal {
+            let ie_overlay = import_export_modal::view(ie_state, self.theme, self.accent_color)
+                .map(Message::ImportExport);
+            view = Overlay::new(view, ie_overlay)
+                .modal()
+                .on_backdrop_press(Message::ImportExport(ImportExportMessage::Cancel))
+                .into();
         }
 
         view
@@ -2866,6 +3925,15 @@ impl Cards {
             self.theme.card_text(),
         );
         self.dot_grid.set_accent_color(self.accent_color);
+    }
+
+    /// Keep dot_grid.blocked in sync with modal state so canvas input is
+    /// suppressed at the source (canvas update()), not just in message dispatch.
+    fn sync_grid_blocked(&mut self) {
+        self.dot_grid.blocked = self.workspace_modal.is_some()
+            || self.settings_open
+            || self.confirm_delete_card_id.is_some()
+            || self.import_export_modal.is_some();
     }
 
     fn update_exclude_region(&mut self) {
