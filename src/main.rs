@@ -10,6 +10,7 @@ mod svg_style;
 mod config;
 mod card;
 mod context_menu;
+mod app_menu;
 mod markdown;
 mod custom_text_editor;
 mod icon_util;
@@ -37,6 +38,7 @@ use settings::{SettingsModal, SettingsCategory};
 use svg_style::SvgStyle;
 use config::{Config, FontFamily, AccentColor};
 use context_menu::ContextMenu;
+use app_menu::{AppMenu, AppMenuItem};
 use card::{Card, CardIcon};
 use positioned::Positioned;
 
@@ -126,7 +128,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 }
 
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.1.4";
+const APP_VERSION: &str = "0.1.5";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
@@ -227,6 +229,16 @@ pub enum Message {
     ShowDeleteConfirmDialog(usize),
     ConfirmDeleteCard,
     CancelDeleteCard,
+    // App menu messages
+    ToggleAppMenu,
+    CloseAppMenu,
+    MenuFileNewBoard,
+    MenuFileQuit,
+            MenuViewResetCanvas,
+            MenuViewToggleSidebar,
+            MenuViewToggleTheme,
+    MenuHelpAbout,
+    MenuHelpKeyboardShortcuts,
 }
 
 struct Cards {
@@ -279,6 +291,11 @@ struct Cards {
     accent_color: Color,
     // Pending card deletion confirmation
     confirm_delete_card_id: Option<usize>,
+    // App menu state
+    app_menu_open: bool,
+    app_menu_animating: bool,
+    app_menu_opening: bool,
+    app_menu_animation_progress: f32,
     // Cache SVG handles
     icon_menu_left: svg::Handle,
     icon_menu_right: svg::Handle,
@@ -290,6 +307,7 @@ struct Cards {
     icon_duplicate: svg::Handle,
     icon_delete: svg::Handle,
     icon_app: svg::Handle,
+    icon_menu: svg::Handle,
     window_size: iced::Size,
     last_tick: Instant,
 }
@@ -368,6 +386,10 @@ impl Cards {
             config,
             accent_color,
             confirm_delete_card_id: None,
+            app_menu_open: false,
+            app_menu_animating: false,
+            app_menu_opening: false,
+            app_menu_animation_progress: 0.0,
             icon_menu_left: svg::Handle::from_memory(include_bytes!("icons/menu-left.svg")),
             icon_menu_right: svg::Handle::from_memory(include_bytes!("icons/menu-right.svg")),
             icon_moon: svg::Handle::from_memory(include_bytes!("icons/moon.svg")),
@@ -378,6 +400,7 @@ impl Cards {
             icon_duplicate: svg::Handle::from_memory(include_bytes!("icons/duplicate.svg")),
             icon_delete: svg::Handle::from_memory(include_bytes!("icons/delete.svg")),
             icon_app: svg::Handle::from_memory(include_bytes!("icons/app.svg")),
+            icon_menu: svg::Handle::from_memory(include_bytes!("icons/menu.svg")),
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
         };
@@ -650,6 +673,26 @@ impl Cards {
                             self.settings_open = false;
                             self.dot_grid.set_effect_enabled(true);
                             self.update_exclude_region();
+                        }
+                    }
+                }
+
+                // Animate app menu open/close
+                if self.app_menu_animating {
+                    // 180ms animation
+                    let delta = 16.0 / 180.0;
+                    if self.app_menu_opening {
+                        self.app_menu_animation_progress += delta;
+                        if self.app_menu_animation_progress >= 1.0 {
+                            self.app_menu_animation_progress = 1.0;
+                            self.app_menu_animating = false;
+                        }
+                    } else {
+                        self.app_menu_animation_progress -= delta;
+                        if self.app_menu_animation_progress <= 0.0 {
+                            self.app_menu_animation_progress = 0.0;
+                            self.app_menu_animating = false;
+                            self.app_menu_open = false;
                         }
                     }
                 }
@@ -1107,6 +1150,9 @@ impl Cards {
                         // Close menus/settings/editing - but never quit the app
                         if self.confirm_delete_card_id.is_some() {
                             self.confirm_delete_card_id = None;
+                            return Task::none();
+                        } else if self.app_menu_open {
+                            self.app_menu_open = false;
                             return Task::none();
                         } else if self.editing_board_index.is_some() {
                             // Cancel board rename
@@ -1638,6 +1684,126 @@ impl Cards {
             Message::CancelDeleteCard => {
                 self.confirm_delete_card_id = None;
             }
+            Message::ToggleAppMenu => {
+                if self.app_menu_open {
+                    // Start closing animation
+                    if self.config.general.enable_animations {
+                        self.app_menu_animating = true;
+                        self.app_menu_opening = false;
+                        self.app_menu_animation_progress = 1.0;
+                    } else {
+                        self.app_menu_open = false;
+                    }
+                } else {
+                    // Open immediately, start opening animation
+                    self.app_menu_open = true;
+                    if self.config.general.enable_animations {
+                        self.app_menu_animating = true;
+                        self.app_menu_opening = true;
+                        self.app_menu_animation_progress = 0.0;
+                    } else {
+                        self.app_menu_animation_progress = 1.0;
+                    }
+                }
+            }
+            Message::CloseAppMenu => {
+                if self.app_menu_open {
+                    if self.config.general.enable_animations {
+                        self.app_menu_animating = true;
+                        self.app_menu_opening = false;
+                        self.app_menu_animation_progress = 1.0;
+                    } else {
+                        self.app_menu_open = false;
+                    }
+                }
+            }
+            Message::MenuFileNewBoard => {
+                self.app_menu_open = false;
+                let board_number = self.boards.len() + 1;
+                let board_name = format!("Board {}", board_number);
+                let new_board_index = self.boards.len();
+                self.boards.push(board_name);
+                self.board_cards.insert(new_board_index, Vec::new());
+                if self.config.general.enable_animations {
+                    self.board_list_animating = true;
+                    self.board_list_animation_progress = 0.0;
+                    self.board_list_animation_type = BoardAnimationType::AddBoard;
+                    self.animating_board_index = Some(self.boards.len() - 1);
+                }
+            }
+            Message::MenuFileQuit => {
+                return iced::exit();
+            }
+            Message::MenuViewResetCanvas => {
+                self.app_menu_open = false;
+                // Animate back to center (same as Ctrl+0)
+                if self.config.general.enable_animations {
+                    self.canvas_animating = true;
+                    self.canvas_animation_start = self.canvas_offset;
+                    self.canvas_animation_progress = 0.0;
+                } else {
+                    self.canvas_offset = Vector::new(0.0, 0.0);
+                    self.dot_grid.set_offset(Vector::new(0.0, 0.0));
+                    self.dot_grid.clear_cards_cache();
+                }
+            }
+            Message::MenuViewToggleSidebar => {
+                self.app_menu_open = false;
+                self.sidebar_open = !self.sidebar_open;
+                if self.config.general.enable_animations {
+                    self.animating = true;
+                    self.animation_progress = 0.0;
+                    self.animation_start_offset = self.sidebar_offset;
+                } else {
+                    self.sidebar_offset = if self.sidebar_open { 0.0 } else { SIDEBAR_HIDDEN_OFFSET };
+                }
+            }
+            Message::MenuViewToggleTheme => {
+                self.app_menu_open = false;
+                // Re-use the same logic as ToggleTheme
+                let next = match self.theme {
+                    Theme::Light => Theme::Dark,
+                    Theme::Dark => Theme::Light,
+                };
+                if self.config.general.enable_animations {
+                    self.theme_transitioning = true;
+                    self.theme_transition_progress = 0.0;
+                    self.next_theme = Some(next);
+                } else {
+                    self.theme = next;
+                    self.dot_grid.set_dot_color(self.theme.dot_color());
+                    self.dot_grid.set_background_color(self.theme.background());
+                    self.dot_grid.set_card_colors(
+                        self.theme.card_background(),
+                        self.theme.card_border(),
+                        self.theme.card_text(),
+                    );
+                    self.dot_grid.clear_cards_cache();
+                    if let Err(e) = self.config.set_theme(next.into()) {
+                        eprintln!("Failed to save theme: {}", e);
+                    }
+                }
+            }
+            Message::MenuHelpAbout => {
+                self.app_menu_open = false;
+                self.settings_open = true;
+                self.settings_category = SettingsCategory::About;
+                if self.config.general.enable_animations {
+                    self.settings_animating = true;
+                    self.settings_opening = true;
+                    self.settings_animation_progress = 0.0;
+                }
+            }
+            Message::MenuHelpKeyboardShortcuts => {
+                self.app_menu_open = false;
+                self.settings_open = true;
+                self.settings_category = SettingsCategory::Shortcuts;
+                if self.config.general.enable_animations {
+                    self.settings_animating = true;
+                    self.settings_opening = true;
+                    self.settings_animation_progress = 0.0;
+                }
+            }
         }
         Task::none()
     }
@@ -1764,12 +1930,6 @@ impl Cards {
     }
 
     fn view(&self) -> Element<Message> {
-        let theme_icon = if matches!(self.theme, Theme::Light) {
-            self.icon_moon.clone()
-        } else {
-            self.icon_sun.clone()
-        };
-
         let settings_icon = self.icon_settings.clone();
 
         let sidebar_bg = self.theme.sidebar_background();
@@ -1875,13 +2035,14 @@ impl Cards {
             shadow_color: self.theme.button_shadow(),
         };
 
-        let theme_btn_style = btn_style.clone();
         let settings_btn_style = btn_style.clone();
+        let menu_btn_style = btn_style.clone();
         let floating_btn_style = btn_style.clone();
 
-        let theme_button = button(
+        let menu_icon = self.icon_menu.clone();
+        let menu_button = button(
             container(
-                svg(theme_icon)
+                svg(menu_icon)
                     .width(20)
                     .height(20)
                     .class(SvgStyle { color: icon_color })
@@ -1893,8 +2054,8 @@ impl Cards {
         )
         .height(40)
         .width(40)
-        .class(theme_btn_style)
-        .on_press(Message::ToggleTheme);
+        .class(menu_btn_style)
+        .on_press(Message::ToggleAppMenu);
 
         let settings_button = button(
             container(
@@ -1931,7 +2092,7 @@ impl Cards {
         let top_row = row![
             sidebar_title,
             Space::with_width(Length::Fill),
-            theme_button,
+            menu_button,
             settings_button,
         ]
         .spacing(10)
@@ -2429,8 +2590,56 @@ impl Cards {
         .into();
 
         // IMPORTANT: Add sidebar overlay LAST (except settings) to ensure it renders on top of all card elements
-        // The order is: base canvas -> context menu -> card menu -> toolbar -> SIDEBAR -> settings
+        // The order is: base canvas -> context menu -> card menu -> toolbar -> SIDEBAR -> app menu -> settings
         view = Overlay::new(view, sidebar).into();
+
+        // Add app menu dropdown (on top of sidebar)
+        if self.app_menu_open || self.app_menu_animating {
+            // Position menu aligned with the sidebar's left edge, below the top button row.
+            // Sidebar is at x=15+offset, width=250. Menu button row height = 10(padding) + 40(button) + 10(padding) = 60.
+            let sidebar_screen_x = 15.0 + self.sidebar_offset;
+            let menu_pos = Point::new(
+                sidebar_screen_x + 8.0,
+                15.0 + 60.0 + 4.0, // sidebar top-y + top-row height + small gap
+            );
+
+            let toggle_theme_label = match self.theme {
+                crate::theme::Theme::Light => "Switch to Dark Mode",
+                crate::theme::Theme::Dark => "Switch to Light Mode",
+            };
+
+            let items: Vec<AppMenuItem<Message>> = vec![
+                AppMenuItem::Label("FILE".to_string()),
+                AppMenuItem::Button { label: "New Board".to_string(),        message: Message::MenuFileNewBoard },
+                AppMenuItem::Button { label: "Quit".to_string(),             message: Message::MenuFileQuit },
+                AppMenuItem::Separator,
+                AppMenuItem::Label("VIEW".to_string()),
+                AppMenuItem::Button { label: "Reset Canvas".to_string(),     message: Message::MenuViewResetCanvas },
+                AppMenuItem::Button { label: "Toggle Sidebar".to_string(),   message: Message::MenuViewToggleSidebar },
+                AppMenuItem::Button { label: toggle_theme_label.to_string(), message: Message::MenuViewToggleTheme },
+                AppMenuItem::Separator,
+                AppMenuItem::Label("HELP".to_string()),
+                AppMenuItem::Button { label: "Keyboard Shortcuts".to_string(), message: Message::MenuHelpKeyboardShortcuts },
+                AppMenuItem::Button { label: "About".to_string(),            message: Message::MenuHelpAbout },
+            ];
+
+            // Use the card/button background so the menu visually pops above the sidebar bg.
+            let menu_bg = self.theme.button_background();
+
+            let app_menu: Element<Message> = AppMenu::new(items, menu_pos)
+                .width(SIDEBAR_WIDTH - 16.0)   // inset 8px each side from sidebar edges
+                .background(menu_bg)
+                .border_color(self.theme.button_border())
+                .text_color(self.theme.button_text())
+                .separator_color(self.theme.accent_glow_from(self.accent_color))
+                .hover_color(accent_bg)
+                .shadow_color(sidebar_shadow)
+                .on_close(Message::CloseAppMenu)
+                .animation_progress(self.app_menu_animation_progress)
+                .into();
+
+            view = Overlay::new(view, app_menu).into();
+        }
 
         // Add delete confirmation dialog (on top of sidebar, below settings)
         if self.confirm_delete_card_id.is_some() {
@@ -2701,6 +2910,155 @@ impl Cards {
             };
             sidebar_bounds.contains(point)
         }
+    }
+
+    fn build_app_menu(&self) -> Element<Message> {
+        let icon_color = self.theme.icon_color();
+        let accent_bg = self.theme.accent_bg_from(self.accent_color);
+        let separator_color = self.theme.accent_glow_from(self.accent_color);
+
+        let item_style = CardButtonStyle {
+            background: Color::TRANSPARENT,
+            background_hovered: accent_bg,
+            text_color: self.theme.button_text(),
+            border_color: Color::TRANSPARENT,
+            shadow_color: Color::TRANSPARENT,
+        };
+
+        // Helper: section label
+        fn make_label<'a>(label: &'static str, color: Color) -> Element<'a, Message> {
+            container(
+                text(label)
+                    .size(11)
+                    .color(Color::from_rgba(color.r, color.g, color.b, 0.6))
+                    .font(iced::Font { weight: iced::font::Weight::Semibold, ..Default::default() })
+            )
+            .padding(Padding { top: 6.0, right: 12.0, bottom: 2.0, left: 12.0 })
+            .into()
+        }
+
+        // Helper: separator line
+        fn make_sep<'a>(sep_color: Color) -> Element<'a, Message> {
+            container(Space::with_height(1))
+                .width(Length::Fill)
+                .height(1)
+                .style(move |_: &IcedTheme| container::Style {
+                    background: Some(iced::Background::Color(sep_color)),
+                    border: Border::default(),
+                    shadow: Shadow::default(),
+                    text_color: None,
+                })
+                .padding(Padding { top: 0.0, right: 8.0, bottom: 0.0, left: 8.0 })
+                .into()
+        }
+
+        // Helper: 4px spacer
+        fn make_gap<'a>() -> Element<'a, Message> {
+            Space::with_height(4).into()
+        }
+
+        let file_label = make_label("FILE", icon_color);
+        let view_label = make_label("VIEW", icon_color);
+        let help_label = make_label("HELP", icon_color);
+
+        let new_board_btn: Element<Message> = button(
+            container(text("New Board").size(13))
+                .width(Length::Fill)
+                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
+        )
+        .width(Length::Fill)
+        .class(item_style.clone())
+        .on_press(Message::MenuFileNewBoard)
+        .into();
+
+        let quit_btn: Element<Message> = button(
+            container(text("Quit").size(13))
+                .width(Length::Fill)
+                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
+        )
+        .width(Length::Fill)
+        .class(item_style.clone())
+        .on_press(Message::MenuFileQuit)
+        .into();
+
+        let reset_btn: Element<Message> = button(
+            container(text("Reset Canvas").size(13))
+                .width(Length::Fill)
+                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
+        )
+        .width(Length::Fill)
+        .class(item_style.clone())
+        .on_press(Message::MenuViewResetCanvas)
+        .into();
+
+        let toggle_sidebar_btn: Element<Message> = button(
+            container(text("Toggle Sidebar").size(13))
+                .width(Length::Fill)
+                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
+        )
+        .width(Length::Fill)
+        .class(item_style.clone())
+        .on_press(Message::MenuViewToggleSidebar)
+        .into();
+
+        // Theme label changes based on current theme
+        let toggle_theme_label = match self.theme {
+            crate::theme::Theme::Light => "Switch to Dark Mode",
+            crate::theme::Theme::Dark => "Switch to Light Mode",
+        };
+        let toggle_theme_btn: Element<Message> = button(
+            container(text(toggle_theme_label).size(13))
+                .width(Length::Fill)
+                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
+        )
+        .width(Length::Fill)
+        .class(item_style.clone())
+        .on_press(Message::MenuViewToggleTheme)
+        .into();
+
+        let shortcuts_btn: Element<Message> = button(
+            container(text("Keyboard Shortcuts").size(13))
+                .width(Length::Fill)
+                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
+        )
+        .width(Length::Fill)
+        .class(item_style.clone())
+        .on_press(Message::MenuHelpKeyboardShortcuts)
+        .into();
+
+        let about_btn: Element<Message> = button(
+            container(text("About").size(13))
+                .width(Length::Fill)
+                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
+        )
+        .width(Length::Fill)
+        .class(item_style)
+        .on_press(Message::MenuHelpAbout)
+        .into();
+
+        let content = column![
+            file_label,
+            new_board_btn,
+            quit_btn,
+            make_gap(),
+            make_sep(separator_color),
+            make_gap(),
+            view_label,
+            reset_btn,
+            toggle_sidebar_btn,
+            toggle_theme_btn,
+            make_gap(),
+            make_sep(separator_color),
+            make_gap(),
+            help_label,
+            shortcuts_btn,
+            about_btn,
+        ]
+        .spacing(0)
+        .padding(Padding { top: 6.0, right: 0.0, bottom: 6.0, left: 0.0 });
+
+        container(content)
+            .into()
     }
 
     fn build_context_menu(&self) -> Element<Message> {
