@@ -118,7 +118,6 @@ jobs:
           mkdir -p AppDir/usr/share/icons/hicolor/64x64/apps
           mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
 
           # Binary
           cp appimage-bin/Cards AppDir/usr/bin/Cards
@@ -135,7 +134,6 @@ jobs:
           cp assets/icon_64.png  AppDir/usr/share/icons/hicolor/64x64/apps/cards.png
           cp assets/icon_128.png AppDir/usr/share/icons/hicolor/128x128/apps/cards.png
           cp assets/icon_256.png AppDir/usr/share/icons/hicolor/256x256/apps/cards.png
-          cp assets/app.svg      AppDir/usr/share/icons/hicolor/scalable/apps/cards.svg
 
           # AppImage spec: icon + .DirIcon at root
           cp assets/icon_256.png AppDir/cards.png
