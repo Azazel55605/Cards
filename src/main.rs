@@ -128,7 +128,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 }
 
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.1.5";
+const APP_VERSION: &str = "0.1.6";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
@@ -267,6 +267,7 @@ struct Cards {
     // Context menu state
     context_menu_position: Option<Point>,
     pending_card_position: Option<Point>,  // Store position for card creation
+    mouse_position: Option<Point>,          // Last known screen mouse position
     // Card customization menu
     card_icon_menu_position: Option<Point>,
     card_icon_menu_card_id: Option<usize>,
@@ -365,6 +366,7 @@ impl Cards {
             next_theme: None,
             context_menu_position: None,
             pending_card_position: None,
+            mouse_position: None,
             card_icon_menu_position: None,
             card_icon_menu_card_id: None,
             editing_card_id: None,
@@ -950,6 +952,9 @@ impl Cards {
             }
             Message::EventOccurred(event) => {
                 match event {
+                    Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                        self.mouse_position = Some(position);
+                    }
                     Event::Window(iced::window::Event::Resized(size)) => {
                         self.window_size = size;
                         self.update_exclude_region();
@@ -997,7 +1002,7 @@ impl Cards {
             }
             Message::AddCard => {
                 if let Some(pos) = self.pending_card_position {
-                    let card_id = self.dot_grid.add_card(pos);
+                    let card_id = self.dot_grid.add_card(pos, self.accent_color);
                     println!("Created card with id: {}, total cards: {}", card_id, self.dot_grid.cards().len());
                 }
                 self.context_menu_position = None;
@@ -1119,13 +1124,25 @@ impl Cards {
 
                     // Global shortcuts when NOT editing a card
                     if self.editing_card_id.is_none() {
-                        // Ctrl+A: Add a new card at the center of the viewport
+                        // Ctrl+A: Add a new card at the mouse position (or viewport centre as fallback)
                         if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "a") {
-                            // Place card near center of canvas view
-                            let center_x = (self.window_size.width / 2.0) - self.canvas_offset.x - (SIDEBAR_WIDTH / 2.0);
-                            let center_y = (self.window_size.height / 2.0) - self.canvas_offset.y;
-                            let pos = Point::new(center_x, center_y);
-                            let card_id = self.dot_grid.add_card(pos);
+                            // Use mouse position if it's on the canvas (to the right of the sidebar),
+                            // otherwise fall back to the viewport centre.
+                            let sidebar_right = 15.0 + SIDEBAR_WIDTH + self.sidebar_offset;
+                            let pos = if let Some(mouse) = self.mouse_position {
+                                if mouse.x > sidebar_right {
+                                    mouse
+                                } else {
+                                    let cx = (self.window_size.width / 2.0) - self.canvas_offset.x - (SIDEBAR_WIDTH / 2.0);
+                                    let cy = (self.window_size.height / 2.0) - self.canvas_offset.y;
+                                    Point::new(cx, cy)
+                                }
+                            } else {
+                                let cx = (self.window_size.width / 2.0) - self.canvas_offset.x - (SIDEBAR_WIDTH / 2.0);
+                                let cy = (self.window_size.height / 2.0) - self.canvas_offset.y;
+                                Point::new(cx, cy)
+                            };
+                            let card_id = self.dot_grid.add_card(pos, self.accent_color);
                             // Auto-select and start editing
                             self.selected_card_id = Some(card_id);
                             self.editing_card_id = Some(card_id);
@@ -1908,14 +1925,18 @@ impl Cards {
         let events = event::listen_with(|event, status, _id| {
             // Only process events that weren't already captured by widgets
             if status == iced::event::Status::Captured {
+                // Still track mouse movement even when captured
+                if let Event::Mouse(mouse::Event::CursorMoved { position }) = event {
+                    return Some(Message::EventOccurred(Event::Mouse(mouse::Event::CursorMoved { position })));
+                }
                 return None;
             }
 
             match event {
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                    // Will be handled in EventOccurred to finish board rename if clicking outside
                     Some(Message::EventOccurred(event))
                 }
+                Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Message::EventOccurred(event)),
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::CloseRequested) => {

@@ -161,7 +161,7 @@ impl DotGrid {
         self.cards_cache.clear();
     }
 
-    pub fn add_card(&mut self, screen_position: Point) -> usize {
+    pub fn add_card(&mut self, screen_position: Point, color: Color) -> usize {
         let id = self.cards.len();
         let world_position = Point::new(
             screen_position.x - self.offset.x,
@@ -173,6 +173,7 @@ impl DotGrid {
             println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
         }
         card.content.set_font(self.font, self.font_size);
+        card.color = color;
         self.cards.push(card);
         self.cards_cache.clear();
         if self.debug_mode {
