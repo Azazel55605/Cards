@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Cards
+Comment=A card-based note-taking application
+Exec=Cards
+Icon=cards
+Type=Application
+Categories=Utility;Office;
+Keywords=cards;notes;markdown;kanban;
+StartupNotify=true
+StartupWMClass=Cards
+
