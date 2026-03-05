@@ -3067,7 +3067,7 @@ impl Cards {
 
         let add_card_btn_style = CardButtonStyle {
             background: Color::TRANSPARENT,
-            background_hovered: self.theme.accent_bg(),
+            background_hovered: self.theme.accent_bg_from(self.accent_color),
             text_color: self.theme.button_text(),
             border_color: Color::TRANSPARENT,
             shadow_color: Color::TRANSPARENT,
