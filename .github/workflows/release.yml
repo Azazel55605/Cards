@@ -174,16 +174,16 @@ jobs:
 
       - name: Flatten dist folder
         run: |
-          # download-artifact v4 puts each artifact in dist/<artifact-name>/<original-filename>
-          # The artifact name IS the desired release filename, so just rename the inner file.
+          mkdir -p dist-out
           for dir in dist/*/; do
             [ -d "$dir" ] || continue
             artifact=$(basename "$dir")
             inner=$(ls "$dir" | head -1)
             [ -n "$inner" ] || continue
-            mv "$dir$inner" "dist/$artifact"
-            rmdir "$dir"
+            mv "$dir$inner" "dist-out/$artifact"
           done
+          rm -rf dist
+          mv dist-out dist
           echo "--- dist contents ---"
           ls -lh dist/
 
