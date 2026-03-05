@@ -88,9 +88,80 @@ jobs:
           path: target/${{ matrix.target }}/release/${{ matrix.artifact }}
           if-no-files-found: error
 
+  appimage:
+    name: Package AppImage (Linux x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: cards-linux-x86_64
+          path: appimage-bin/
+
+      - name: Install appimagetool
+        run: |
+          wget -q "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -O /usr/local/bin/appimagetool
+          chmod +x /usr/local/bin/appimagetool
+
+      - name: Assemble AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/16x16/apps
+          mkdir -p AppDir/usr/share/icons/hicolor/32x32/apps
+          mkdir -p AppDir/usr/share/icons/hicolor/48x48/apps
+          mkdir -p AppDir/usr/share/icons/hicolor/64x64/apps
+          mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+
+          # Binary
+          cp appimage-bin/Cards AppDir/usr/bin/Cards
+          chmod +x AppDir/usr/bin/Cards
+
+          # Desktop file (AppImage spec requires it at root too)
+          cp assets/cards.desktop AppDir/cards.desktop
+          cp assets/cards.desktop AppDir/usr/share/applications/cards.desktop
+
+          # Icons
+          cp assets/icon_16.png  AppDir/usr/share/icons/hicolor/16x16/apps/cards.png
+          cp assets/icon_32.png  AppDir/usr/share/icons/hicolor/32x32/apps/cards.png
+          cp assets/icon_48.png  AppDir/usr/share/icons/hicolor/48x48/apps/cards.png
+          cp assets/icon_64.png  AppDir/usr/share/icons/hicolor/64x64/apps/cards.png
+          cp assets/icon_128.png AppDir/usr/share/icons/hicolor/128x128/apps/cards.png
+          cp assets/icon_256.png AppDir/usr/share/icons/hicolor/256x256/apps/cards.png
+          cp assets/app.svg      AppDir/usr/share/icons/hicolor/scalable/apps/cards.svg
+
+          # AppImage spec: icon + .DirIcon at root
+          cp assets/icon_256.png AppDir/cards.png
+          cp assets/icon_256.png AppDir/.DirIcon
+
+          # AppRun entry-point
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/sh
+          exec "$APPDIR/usr/bin/Cards" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+      - name: Build AppImage
+        run: |
+          ARCH=x86_64 appimagetool AppDir Cards-x86_64.AppImage
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cards-linux-x86_64.AppImage
+          path: Cards-x86_64.AppImage
+          if-no-files-found: error
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, appimage]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -107,10 +178,17 @@ jobs:
         run: |
           for dir in dist/*/; do
             asset=$(basename "$dir")
-            file=$(ls "$dir")
-            mv "$dir$file" "dist/$asset-bin"
-            rmdir "$dir"
-            mv "dist/$asset-bin" "dist/$asset"
+            # If the inner file already has an extension that differs from the
+            # artifact directory name, keep the original filename (e.g. .AppImage).
+            inner=$(ls "$dir")
+            ext="${inner##*.}"
+            if [ "$inner" = "Cards-x86_64.AppImage" ]; then
+              mv "$dir$inner" "dist/$inner"
+            else
+              mv "$dir$inner" "dist/$asset-bin"
+              mv "dist/$asset-bin" "dist/$asset"
+            fi
+            rmdir "$dir" 2>/dev/null || true
           done
 
       - name: Create Release
