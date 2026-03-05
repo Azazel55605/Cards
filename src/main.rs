@@ -2450,9 +2450,10 @@ impl Cards {
             .height(Length::Fill)
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::new()
-                    .width(2)
-                    .scroller_width(2)
-            ));
+                    .width(3)
+                    .scroller_width(3)
+            ))
+            .style(Self::scrollbar_style(accent));
 
         // Wrap boards section in stack if animating button position
         let boards_with_animation: Element<Message> = if animation_active && animation_type == BoardAnimationType::ButtonPositionChange {
@@ -3114,7 +3115,6 @@ impl Cards {
     fn build_card_icon_menu(&self) -> Element<Message> {
         let bg_color = self.theme.sidebar_background();
         let separator_color = self.theme.icon_color().scale_alpha(0.2);
-        let scrollbar_color = self.accent_color;
         let accent_bg = self.theme.accent_bg_from(self.accent_color);
 
         // Get the current card's color
@@ -3165,37 +3165,7 @@ impl Cards {
             icon_rows = icon_rows.push(icon_row);
         }
 
-        // Custom scrollbar style
-        let scrollable_style = move |_theme: &IcedTheme, _status: iced::widget::scrollable::Status| {
-            use iced::widget::scrollable::{Rail, Scroller};
-            iced::widget::scrollable::Style {
-                container: iced::widget::container::Style::default(),
-                vertical_rail: Rail {
-                    background: None,
-                    border: Border::default(),
-                    scroller: Scroller {
-                        color: scrollbar_color,
-                        border: Border {
-                            radius: 2.0.into(),
-                            ..Default::default()
-                        },
-                    },
-                },
-                horizontal_rail: Rail {
-                    background: None,
-                    border: Border::default(),
-                    scroller: Scroller {
-                        color: scrollbar_color,
-                        border: Border {
-                            radius: 2.0.into(),
-                            ..Default::default()
-                        },
-                    },
-                },
-                gap: None,
-            }
-        };
-
+        // Custom scrollbar style - uses card color to match the card's accent
         // Scrollable icon area
         let scrollable_icons = scrollable(
             container(icon_rows)
@@ -3206,10 +3176,10 @@ impl Cards {
         .width(Length::Fill)
         .direction(iced::widget::scrollable::Direction::Vertical(
             iced::widget::scrollable::Scrollbar::new()
-                .width(4)
-                .scroller_width(4)
+                .width(3)
+                .scroller_width(3)
         ))
-        .style(scrollable_style);
+        .style(Self::scrollbar_style(card_color));
 
         // Separator
         let separator = container(Space::with_height(1))
@@ -4130,29 +4100,6 @@ impl Cards {
         };
 
         let accent = self.accent_color;
-        let settings_scrollbar_style = move |_theme: &IcedTheme, _status: iced::widget::scrollable::Status| {
-            use iced::widget::scrollable::{Rail, Scroller};
-            iced::widget::scrollable::Style {
-                container: iced::widget::container::Style::default(),
-                vertical_rail: Rail {
-                    background: None,
-                    border: Border::default(),
-                    scroller: Scroller {
-                        color: accent,
-                        border: Border { radius: 2.0.into(), ..Default::default() },
-                    },
-                },
-                horizontal_rail: Rail {
-                    background: None,
-                    border: Border::default(),
-                    scroller: Scroller {
-                        color: accent,
-                        border: Border { radius: 2.0.into(), ..Default::default() },
-                    },
-                },
-                gap: None,
-            }
-        };
 
         container(
             scrollable(
@@ -4166,16 +4113,47 @@ impl Cards {
             )
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::new()
-                    .width(4)
-                    .scroller_width(4)
+                    .width(3)
+                    .scroller_width(3)
             ))
-            .style(settings_scrollbar_style)
+            .style(Self::scrollbar_style(accent))
         )
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
     }
 
+
+    /// Returns a unified scrollbar style closure.
+    /// `thumb_color` is the accent/card color; the track is the same color at low alpha.
+    fn scrollbar_style(thumb_color: Color) -> impl Fn(&IcedTheme, iced::widget::scrollable::Status) -> iced::widget::scrollable::Style {
+        move |_theme: &IcedTheme, _status: iced::widget::scrollable::Status| {
+            use iced::widget::scrollable::{Rail, Scroller};
+            let track_color = Color { a: 0.10, ..thumb_color };
+            let thumb = Color { a: 0.55, ..thumb_color };
+            let rail = Rail {
+                background: Some(iced::Background::Color(track_color)),
+                border: Border { radius: 3.0.into(), ..Default::default() },
+                scroller: Scroller {
+                    color: thumb,
+                    border: Border { radius: 3.0.into(), ..Default::default() },
+                },
+            };
+            iced::widget::scrollable::Style {
+                container: iced::widget::container::Style::default(),
+                vertical_rail: rail,
+                horizontal_rail: Rail {
+                    background: None,
+                    border: Border::default(),
+                    scroller: Scroller {
+                        color: thumb,
+                        border: Border { radius: 3.0.into(), ..Default::default() },
+                    },
+                },
+                gap: None,
+            }
+        }
+    }
 
     fn build_toggle_button(&self, is_on: bool, message: Message) -> Element<Message> {
         let accent_bg = self.theme.accent_bg_from(self.accent_color);
