@@ -174,20 +174,18 @@ jobs:
 
       - name: Flatten dist folder
         run: |
+          # download-artifact v4 puts each artifact in dist/<artifact-name>/<original-filename>
+          # The artifact name IS the desired release filename, so just rename the inner file.
           for dir in dist/*/; do
-            asset=$(basename "$dir")
-            # If the inner file already has an extension that differs from the
-            # artifact directory name, keep the original filename (e.g. .AppImage).
-            inner=$(ls "$dir")
-            ext="${inner##*.}"
-            if [ "$inner" = "Cards-x86_64.AppImage" ]; then
-              mv "$dir$inner" "dist/$inner"
-            else
-              mv "$dir$inner" "dist/$asset-bin"
-              mv "dist/$asset-bin" "dist/$asset"
-            fi
-            rmdir "$dir" 2>/dev/null || true
+            [ -d "$dir" ] || continue
+            artifact=$(basename "$dir")
+            inner=$(ls "$dir" | head -1)
+            [ -n "$inner" ] || continue
+            mv "$dir$inner" "dist/$artifact"
+            rmdir "$dir"
           done
+          echo "--- dist contents ---"
+          ls -lh dist/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
