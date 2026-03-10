@@ -13,6 +13,7 @@ mod context_menu;
 mod app_menu;
 mod markdown;
 mod custom_text_editor;
+mod card_toolbar;
 mod icon_util;
 mod positioned;
 mod text_document;
@@ -44,12 +45,13 @@ use svg_style::SvgStyle;
 use config::{Config, FontFamily, AccentColor};
 use context_menu::ContextMenu;
 use app_menu::{AppMenu, AppMenuItem};
-use card::{Card, CardIcon};
+use card::{Card, CardIcon, CardType};
 use positioned::Positioned;
 use workspace::{WorkspaceFile, BoardData, CardData};
 use workspace_modal::{WorkspaceModalState, WorkspaceModalMessage};
 use file_picker::{FilePickerState, FilePickerMessage, FilePickerMode};
 use import_export_modal::{ImportExportState, ImportExportMessage, IEKind, ImportExportResult};
+use card_toolbar::{CardToolbar, ToolbarItem};
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -139,7 +141,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 }
 
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.1.8";
+const APP_VERSION: &str = "0.1.9";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
@@ -203,11 +205,15 @@ pub enum Message {
     ShowContextMenu(Point),
     HideContextMenu,
     AddCard,
+    AddCardOfType(CardType),
     // Card messages
     ShowCardIconMenu(usize),
     ChangeCardIcon(usize, CardIcon),
     ChangeCardColor(usize, Color),
+    ChangeCardType(usize, CardType),
     HideCardIconMenu,
+    ShowCardTypeMenu(usize),
+    HideCardTypeMenu,
     // Card content editing
     StartEditingCard(usize),
     CardEditorAction(usize, text_editor::Action),
@@ -301,6 +307,9 @@ struct Cards {
     // Card customization menu
     card_icon_menu_position: Option<Point>,
     card_icon_menu_card_id: Option<usize>,
+    // Card type menu (popup on right icon click)
+    card_type_menu_position: Option<Point>,
+    card_type_menu_card_id: Option<usize>,
     // Card editing state
     editing_card_id: Option<usize>,
     selected_card_id: Option<usize>,  // Track selected card for toolbar
@@ -339,6 +348,15 @@ struct Cards {
     icon_delete: svg::Handle,
     icon_app: svg::Handle,
     icon_menu: svg::Handle,
+    icon_type_text: svg::Handle,
+    icon_type_markdown: svg::Handle,
+    icon_fmt_bold: svg::Handle,
+    icon_fmt_italic: svg::Handle,
+    icon_fmt_strikethrough: svg::Handle,
+    icon_fmt_code: svg::Handle,
+    icon_fmt_codeblock: svg::Handle,
+    icon_fmt_heading: svg::Handle,
+    icon_fmt_bullet: svg::Handle,
     window_size: iced::Size,
     last_tick: Instant,
     // Workspace persistence
@@ -427,6 +445,8 @@ impl Cards {
             mouse_position: None,
             card_icon_menu_position: None,
             card_icon_menu_card_id: None,
+            card_type_menu_position: None,
+            card_type_menu_card_id: None,
             editing_card_id: None,
             selected_card_id: None,
             boards: vec!["Board 1".to_string()],
@@ -461,6 +481,15 @@ impl Cards {
             icon_delete: svg::Handle::from_memory(include_bytes!("icons/delete.svg")),
             icon_app: svg::Handle::from_memory(include_bytes!("icons/app.svg")),
             icon_menu: svg::Handle::from_memory(include_bytes!("icons/menu.svg")),
+            icon_type_text: svg::Handle::from_memory(include_bytes!("icons/type-text.svg")),
+            icon_type_markdown: svg::Handle::from_memory(include_bytes!("icons/type-markdown.svg")),
+            icon_fmt_bold: svg::Handle::from_memory(include_bytes!("icons/fmt-bold.svg")),
+            icon_fmt_italic: svg::Handle::from_memory(include_bytes!("icons/fmt-italic.svg")),
+            icon_fmt_strikethrough: svg::Handle::from_memory(include_bytes!("icons/fmt-strikethrough.svg")),
+            icon_fmt_code: svg::Handle::from_memory(include_bytes!("icons/fmt-code.svg")),
+            icon_fmt_codeblock: svg::Handle::from_memory(include_bytes!("icons/fmt-codeblock.svg")),
+            icon_fmt_heading: svg::Handle::from_memory(include_bytes!("icons/fmt-heading.svg")),
+            icon_fmt_bullet: svg::Handle::from_memory(include_bytes!("icons/fmt-bullet.svg")),
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
             workspace_path: None,
@@ -733,18 +762,15 @@ impl Cards {
                                         // Adjust active board index if needed
                                         if self.active_board_index >= self.boards.len() {
                                             self.active_board_index = self.boards.len().saturating_sub(1);
-                                            // Load cards for the new active board
                                             let new_cards = self.board_cards.get(&self.active_board_index).cloned().unwrap_or_default();
-                                            self.dot_grid.load_cards(new_cards);
+                                            self.load_cards_with_positions(new_cards);
                                         } else if self.active_board_index > index {
                                             self.active_board_index = self.active_board_index.saturating_sub(1);
-                                            // Active board shifted, reload its cards
                                             let new_cards = self.board_cards.get(&self.active_board_index).cloned().unwrap_or_default();
-                                            self.dot_grid.load_cards(new_cards);
+                                            self.load_cards_with_positions(new_cards);
                                         } else if self.active_board_index == index {
-                                            // Deleted the active board, switch to new active board
                                             let new_cards = self.board_cards.get(&self.active_board_index).cloned().unwrap_or_default();
-                                            self.dot_grid.load_cards(new_cards);
+                                            self.load_cards_with_positions(new_cards);
                                         }
 
                                         self.dot_grid.clear_cards_cache();
@@ -873,6 +899,23 @@ impl Cards {
                             self.card_icon_menu_card_id = Some(card_id);
                             self.context_menu_position = None;
                             self.pending_card_position = None;
+                            self.card_type_menu_position = None;
+                            self.card_type_menu_card_id = None;
+                        }
+                    }
+                    DotGridMessage::CardTypeIconClick(card_id) => {
+                        if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
+                            // Position menu just below the right icon
+                            let screen_pos = Point::new(
+                                card.current_position.x + self.canvas_offset.x + card.width - 30.0,
+                                card.current_position.y + self.canvas_offset.y + 30.0,
+                            );
+                            self.card_type_menu_position = Some(screen_pos);
+                            self.card_type_menu_card_id = Some(card_id);
+                            self.card_icon_menu_position = None;
+                            self.card_icon_menu_card_id = None;
+                            self.context_menu_position = None;
+                            self.pending_card_position = None;
                         }
                     }
                     DotGridMessage::CardLeftClickBar(card_id, _pos) => {
@@ -901,9 +944,10 @@ impl Cards {
                                 }
                             }
 
-                            // Update checkbox positions for cards that were editing
+                            // Update checkbox + link positions for cards that were editing
                             for id in card_ids {
                                 self.dot_grid.update_card_checkbox_positions(id);
+                                self.dot_grid.update_card_link_positions(id);
                             }
 
                             self.editing_card_id = None;
@@ -921,9 +965,10 @@ impl Cards {
                                 card.is_editing = false;
                             }
 
-                            // Update checkbox positions for previously editing cards
+                            // Update checkbox + link positions for previously editing cards
                             for id in previously_editing {
                                 self.dot_grid.update_card_checkbox_positions(id);
+                                self.dot_grid.update_card_link_positions(id);
                             }
 
                             // Start editing the card and select it
@@ -996,30 +1041,36 @@ impl Cards {
                         let dot_spacing = self.dot_grid.dot_spacing();
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             card.is_dragging = false;
-                            card.target_position = Card::snap_to_grid(card.current_position, dot_spacing);
+                            let snapped = Card::snap_to_grid(card.current_position, dot_spacing);
+                            // Set both so the saved position is already snapped
+                            card.current_position = snapped;
+                            card.target_position = snapped;
                         }
                         self.selected_card_id = None;
                         self.dot_grid.clear_cards_cache();
                         self.workspace_dirty = true;
                     }
                     DotGridMessage::CheckboxToggle(card_id, line_index) => {
-                        // Toggle checkbox in the card's markdown text
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             let text = card.content.text();
-                            if self.config.general.debug_mode {
-                                println!("DEBUG: CheckboxToggle - card_id: {}, line_index: {}", card_id, line_index);
-                                println!("DEBUG: Text before toggle:\n{}", text);
-                            }
-                            let updated_text = Self::toggle_checkbox_in_text(&text, line_index, self.config.general.debug_mode);
-                            if self.config.general.debug_mode {
-                                println!("DEBUG: Text after toggle:\n{}", updated_text);
-                            }
+                            let card_type = card.card_type;
+                            // For Markdown cards, toggle directly in plain text.
+                            // For legacy <md>-tagged cards, use the tag-aware helper.
+                            let updated_text = if card_type == crate::card::CardType::Markdown {
+                                Self::toggle_checkbox_markdown(&text, line_index)
+                            } else {
+                                Self::toggle_checkbox_in_text(&text, line_index, self.config.general.debug_mode)
+                            };
                             card.content.set_text(updated_text);
                             self.dot_grid.clear_cards_cache();
-                            // Update checkbox positions after content change
                             self.dot_grid.update_card_checkbox_positions(card_id);
+                            self.dot_grid.update_card_link_positions(card_id);
                             self.workspace_dirty = true;
                         }
+                    }
+                    DotGridMessage::LinkClick(url) => {
+                        // Open URL in default browser, ignore errors silently
+                        let _ = open::that(&url);
                     }
                     DotGridMessage::CardTextClick(card_id, click_pos) => {
                         // Get canvas offset first (before borrowing cards_mut)
@@ -1125,6 +1176,18 @@ impl Cards {
                 self.context_menu_position = None;
                 self.pending_card_position = None;
             }
+            Message::AddCardOfType(card_type) => {
+                if let Some(pos) = self.pending_card_position {
+                    let card_id = self.dot_grid.add_card(pos, self.accent_color);
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.card_type = card_type;
+                    }
+                    self.dot_grid.clear_cards_cache();
+                    self.workspace_dirty = true;
+                }
+                self.context_menu_position = None;
+                self.pending_card_position = None;
+            }
             Message::ShowCardIconMenu(card_id) => {
                 if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
                     let screen_pos = Point::new(
@@ -1151,6 +1214,17 @@ impl Cards {
                 }
                 // Keep the icon menu open so the user can see the icons update
                 // with the new color. The menu will close normally on outside click.
+                self.workspace_dirty = true;
+            }
+            Message::ChangeCardType(card_id, card_type) => {
+                if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                    card.card_type = card_type;
+                    self.dot_grid.clear_cards_cache();
+                }
+                self.dot_grid.update_card_checkbox_positions(card_id);
+                self.dot_grid.update_card_link_positions(card_id);
+                self.card_type_menu_position = None;
+                self.card_type_menu_card_id = None;
                 self.workspace_dirty = true;
             }
             Message::StartEditingCard(card_id) => {
@@ -1198,8 +1272,7 @@ impl Cards {
 
                             // Load new board's cards
                             let new_cards = self.board_cards.get(&next_index).cloned().unwrap_or_default();
-                            self.dot_grid.load_cards(new_cards);
-                            self.dot_grid.clear_cards_cache();
+                            self.load_cards_with_positions(new_cards);
                             self.save_workspace_to_file();
                         }
                         return Task::none();
@@ -1228,8 +1301,7 @@ impl Cards {
 
                             // Load new board's cards
                             let new_cards = self.board_cards.get(&prev_index).cloned().unwrap_or_default();
-                            self.dot_grid.load_cards(new_cards);
-                            self.dot_grid.clear_cards_cache();
+                            self.load_cards_with_positions(new_cards);
                             self.save_workspace_to_file();
                         }
                         return Task::none();
@@ -1592,6 +1664,20 @@ impl Cards {
                 self.card_icon_menu_position = None;
                 self.card_icon_menu_card_id = None;
             }
+            Message::ShowCardTypeMenu(card_id) => {
+                if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
+                    let screen_pos = Point::new(
+                        card.current_position.x + self.canvas_offset.x + card.width - 30.0,
+                        card.current_position.y + self.canvas_offset.y + 30.0,
+                    );
+                    self.card_type_menu_position = Some(screen_pos);
+                    self.card_type_menu_card_id = Some(card_id);
+                }
+            }
+            Message::HideCardTypeMenu => {
+                self.card_type_menu_position = None;
+                self.card_type_menu_card_id = None;
+            }
             Message::FormatBold => {
                 if let Some(card_id) = self.editing_card_id {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
@@ -1669,6 +1755,10 @@ impl Cards {
                         card.width,
                         card.height,
                     );
+                    // Copy card type to the duplicate
+                    if let Some(new_card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == new_card_id) {
+                        new_card.card_type = card.card_type;
+                    }
                     self.selected_card_id = Some(new_card_id);
                     self.dot_grid.clear_cards_cache();
                     self.workspace_dirty = true;
@@ -1731,16 +1821,7 @@ impl Cards {
 
                         // Load new board's cards (or create empty vec if board doesn't exist in map)
                         let new_board_cards = self.board_cards.get(&index).cloned().unwrap_or_default();
-                        self.dot_grid.load_cards(new_board_cards);
-
-                        // Update checkbox positions for all loaded cards
-                        let card_ids: Vec<usize> = self.dot_grid.cards().iter().map(|c| c.id).collect();
-                        for card_id in card_ids {
-                            self.dot_grid.update_card_checkbox_positions(card_id);
-                        }
-
-                        // Clear the cards cache to force re-render
-                        self.dot_grid.clear_cards_cache();
+                        self.load_cards_with_positions(new_board_cards);
 
                         // Persist changes immediately on board switch
                         self.save_workspace_to_file();
@@ -2215,6 +2296,17 @@ impl Cards {
         self.board_cards.insert(self.active_board_index, current_cards);
     }
 
+    /// Load a set of cards into the canvas and rebuild checkbox + link hit-rects.
+    fn load_cards_with_positions(&mut self, cards: Vec<crate::card::Card>) {
+        self.dot_grid.load_cards(cards);
+        self.dot_grid.clear_cards_cache();
+        let ids: Vec<usize> = self.dot_grid.cards().iter().map(|c| c.id).collect();
+        for id in ids {
+            self.dot_grid.update_card_checkbox_positions(id);
+            self.dot_grid.update_card_link_positions(id);
+        }
+    }
+
     // ── Workspace persistence ──────────────────────────────────────────────
 
     /// Load a `WorkspaceFile` into the application state.
@@ -2462,6 +2554,7 @@ impl Cards {
                 card.content.set_font(self.dot_grid.font(), self.dot_grid.font_size());
                 card.icon = cd.to_icon();
                 card.color = cd.to_color();
+                card.card_type = cd.to_card_type();
                 card.width = cd.width;
                 card.height = cd.height;
                 card.target_width = cd.width;
@@ -2489,6 +2582,13 @@ impl Cards {
         let active_cards = self.board_cards.get(&restored_board).cloned().unwrap_or_default();
         self.dot_grid.load_cards(active_cards);
         self.dot_grid.clear_cards_cache();
+
+        // Build checkbox + link hit-rects for all loaded cards
+        let card_ids: Vec<usize> = self.dot_grid.cards().iter().map(|c| c.id).collect();
+        for id in card_ids {
+            self.dot_grid.update_card_checkbox_positions(id);
+            self.dot_grid.update_card_link_positions(id);
+        }
 
         // Restore canvas scroll position
         self.canvas_offset = Vector::new(ws.canvas_offset_x, ws.canvas_offset_y);
@@ -2800,6 +2900,39 @@ impl Cards {
 
     /// Toggle a checkbox at the specified line index in markdown text
     /// This must match exactly how the text_processor and markdown_parser work
+    /// Toggle a checkbox for a plain Markdown card (content is raw markdown, no <md> tags).
+    fn toggle_checkbox_markdown(text: &str, line_index: usize) -> String {
+        let mut counter = 0usize;
+        let mut result = String::new();
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            let is_cb = trimmed.starts_with("- [ ]")
+                || trimmed.starts_with("- [x]")
+                || trimmed.starts_with("- [X]");
+            if is_cb {
+                if counter == line_index {
+                    if trimmed.starts_with("- [ ]") {
+                        result.push_str(&line.replacen("- [ ]", "- [x]", 1));
+                    } else {
+                        let toggled = line.replacen("- [x]", "- [ ]", 1);
+                        result.push_str(&toggled.replacen("- [X]", "- [ ]", 1));
+                    }
+                } else {
+                    result.push_str(line);
+                }
+                counter += 1;
+            } else {
+                result.push_str(line);
+            }
+            result.push('\n');
+        }
+        // Remove trailing newline if original didn't end with one
+        if !text.ends_with('\n') && result.ends_with('\n') {
+            result.pop();
+        }
+        result
+    }
+
     fn toggle_checkbox_in_text(text: &str, line_index: usize, debug_mode: bool) -> String {
         let mut result = String::new();
         let mut checkbox_counter = 0;  // Global counter across ALL md blocks
@@ -2941,7 +3074,7 @@ impl Cards {
                 self.theme.button_border(),
                 sidebar_shadow,
             )
-            .width(160.0)
+            .width(185.0)
             .on_close(Message::HideContextMenu)
             .into();
 
@@ -2969,27 +3102,67 @@ impl Cards {
             ).into();
 
             view = Overlay::new(view, positioned_icon).into();
+
+            // Type icon on the right side of the top bar
+            let type_icon_handle = match card.card_type {
+                CardType::Text => self.icon_type_text.clone(),
+                CardType::Markdown => self.icon_type_markdown.clone(),
+            };
+            let type_icon_color = card.color;
+            let type_icon_x = card.current_position.x + self.canvas_offset.x + card.width - icon_size - 8.0;
+            let type_icon_y = icon_y;
+            let type_icon_widget = svg(type_icon_handle)
+                .width(icon_size)
+                .height(icon_size)
+                .class(SvgStyle { color: type_icon_color });
+            let positioned_type_icon: Element<Message> = Positioned::new(
+                type_icon_widget,
+                Point::new(type_icon_x, type_icon_y)
+            ).into();
+            view = Overlay::new(view, positioned_type_icon).into();
         }
 
         // Add card toolbar (before sidebar) - shown when a card is selected
         if let Some(card_id) = self.selected_card_id {
             if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
-                // Position toolbar above the card, centered
-                // Toolbar width is 360.0, so offset by half to center it
-                let toolbar_x = card.current_position.x + self.canvas_offset.x + (card.width / 2.0) - 250.0;
-                let toolbar_y = card.current_position.y + self.canvas_offset.y - 70.0;
-                let toolbar_pos = Point::new(toolbar_x, toolbar_y);
+                let card_type = card.card_type;
 
-                let toolbar_content = self.build_card_toolbar(card_id);
-                let toolbar: Element<Message> = ContextMenu::new(
-                    toolbar_content,
-                    toolbar_pos,
+                let mut items: Vec<ToolbarItem<Message>> = Vec::new();
+                if card_type == CardType::Markdown {
+                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_bold.clone(),          message: Message::FormatBold });
+                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_italic.clone(),        message: Message::FormatItalic });
+                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_strikethrough.clone(), message: Message::FormatStrikethrough });
+                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_code.clone(),          message: Message::FormatCode });
+                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_codeblock.clone(),     message: Message::FormatCodeBlock });
+                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_heading.clone(),       message: Message::FormatHeading });
+                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_bullet.clone(),        message: Message::FormatBullet });
+                    items.push(ToolbarItem::Separator);
+                }
+                items.push(ToolbarItem::Icon { handle: self.icon_duplicate.clone(), message: Message::DuplicateCard(card_id) });
+                items.push(ToolbarItem::Icon { handle: self.icon_delete.clone(),    message: Message::DeleteCard(card_id) });
+
+                let pill_w = CardToolbar::<Message>::measure_width(&items);
+                let pill_h = CardToolbar::<Message>::pill_height();
+
+                let card_screen_x = card.current_position.x + self.canvas_offset.x;
+                let card_screen_y = card.current_position.y + self.canvas_offset.y;
+
+                // Centre above card, clamped to window
+                let mut pill_x = card_screen_x + card.width / 2.0 - pill_w / 2.0;
+                let mut pill_y = card_screen_y - pill_h - 8.0;
+                pill_x = pill_x.max(8.0).min((self.window_size.width - pill_w - 8.0).max(8.0));
+                pill_y = pill_y.max(8.0);
+
+                let toolbar: Element<Message> = CardToolbar::new(
+                    items,
+                    Point::new(pill_x, pill_y),
                     self.theme.sidebar_background(),
                     self.theme.button_border(),
                     self.theme.sidebar_shadow(),
-                )
-                .width(500.0)
-                .into();
+                    self.theme.icon_color(),
+                    self.theme.accent_bg_from(self.accent_color),
+                    self.theme.button_text(),
+                ).into();
 
                 view = Overlay::new(view, toolbar).into();
             }
@@ -3010,6 +3183,24 @@ impl Cards {
             .into();
 
             view = Overlay::new(view, card_menu).into();
+        }
+
+        // Card type menu (shown when clicking the right type icon)
+        if let Some(pos) = self.card_type_menu_position {
+            if let Some(card_id) = self.card_type_menu_card_id {
+                let type_menu_content = self.build_card_type_menu(card_id);
+                let type_menu: Element<Message> = ContextMenu::new(
+                    type_menu_content,
+                    pos,
+                    sidebar_bg,
+                    self.theme.button_border(),
+                    sidebar_shadow,
+                )
+                .width(155.0)
+                .on_close(Message::HideCardTypeMenu)
+                .into();
+                view = Overlay::new(view, type_menu).into();
+            }
         }
 
         // Build sidebar content with title
@@ -4165,52 +4356,131 @@ impl Cards {
 
     fn build_context_menu(&self) -> Element<Message> {
         let icon_color = self.theme.icon_color();
-        let bg_color = self.theme.sidebar_background();
+        let text_color = self.theme.button_text();
+        let separator_color = self.theme.separator_color();
 
-        let add_card_btn_style = CardButtonStyle {
+        let btn_style = CardButtonStyle {
             background: Color::TRANSPARENT,
             background_hovered: self.theme.accent_bg_from(self.accent_color),
-            text_color: self.theme.button_text(),
+            text_color: text_color,
             border_color: Color::TRANSPARENT,
             shadow_color: Color::TRANSPARENT,
         };
 
-        let add_card_button = button(
+        let item_padding = Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 };
+
+        let add_text_btn = button(
             row![
-                svg(self.icon_add.clone())
-                    .width(16)
-                    .height(16)
+                svg(self.icon_type_text.clone())
+                    .width(15).height(15)
                     .class(SvgStyle { color: icon_color }),
-                text("Add Card").size(14),
+                text("Text Card").size(13).color(text_color),
             ]
-            .spacing(10)
+            .spacing(9)
             .align_y(Alignment::Center)
-            .padding(Padding {
-                top: 8.0,
-                right: 12.0,
-                bottom: 8.0,
-                left: 12.0,
-            })
+            .padding(item_padding)
         )
         .width(Length::Fill)
-        .class(add_card_btn_style)
-        .on_press(Message::AddCard);
+        .class(btn_style.clone())
+        .on_press(Message::AddCardOfType(CardType::Text));
+
+        let add_md_btn = button(
+            row![
+                svg(self.icon_type_markdown.clone())
+                    .width(15).height(15)
+                    .class(SvgStyle { color: icon_color }),
+                text("Markdown Card").size(13).color(text_color),
+            ]
+            .spacing(9)
+            .align_y(Alignment::Center)
+            .padding(item_padding)
+        )
+        .width(Length::Fill)
+        .class(btn_style.clone())
+        .on_press(Message::AddCardOfType(CardType::Markdown));
+
+        let sep = container(Space::with_height(1))
+            .width(Length::Fill).height(1)
+            .style(move |_: &IcedTheme| container::Style {
+                background: Some(iced::Background::Color(separator_color)),
+                ..Default::default()
+            });
 
         container(
             column![
-                add_card_button,
+                add_text_btn,
+                sep,
+                add_md_btn,
             ]
-            .padding(5.0)
+            .padding(4.0)
         )
-        .style(move |_theme: &IcedTheme| {
-            container::Style {
-                background: Some(iced::Background::Color(bg_color)),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                text_color: None,
-            }
-        })
         .into()
+    }
+
+    fn build_card_type_menu(&self, card_id: usize) -> Element<Message> {
+        let icon_color = self.theme.icon_color();
+        let text_color = self.theme.button_text();
+        let separator_color = self.theme.separator_color();
+        let accent_bg = self.theme.accent_bg_from(self.accent_color);
+
+        let current_type = self.dot_grid.cards()
+            .iter()
+            .find(|c| c.id == card_id)
+            .map(|c| c.card_type)
+            .unwrap_or(CardType::Text);
+
+        let btn_style = CardButtonStyle {
+            background: Color::TRANSPARENT,
+            background_hovered: accent_bg,
+            text_color,
+            border_color: Color::TRANSPARENT,
+            shadow_color: Color::TRANSPARENT,
+        };
+        let active_style = CardButtonStyle {
+            background: accent_bg,
+            background_hovered: accent_bg,
+            text_color,
+            border_color: Color::TRANSPARENT,
+            shadow_color: Color::TRANSPARENT,
+        };
+
+        let item_padding = Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 };
+
+        let text_style = if current_type == CardType::Text { active_style.clone() } else { btn_style.clone() };
+        let md_style   = if current_type == CardType::Markdown { active_style.clone() } else { btn_style.clone() };
+
+        let text_btn = button(
+            row![
+                svg(self.icon_type_text.clone()).width(15).height(15)
+                    .class(SvgStyle { color: icon_color }),
+                text("Text").size(13).color(text_color),
+            ]
+            .spacing(9).align_y(Alignment::Center).padding(item_padding)
+        )
+        .width(Length::Fill)
+        .class(text_style)
+        .on_press(Message::ChangeCardType(card_id, CardType::Text));
+
+        let md_btn = button(
+            row![
+                svg(self.icon_type_markdown.clone()).width(15).height(15)
+                    .class(SvgStyle { color: icon_color }),
+                text("Markdown").size(13).color(text_color),
+            ]
+            .spacing(9).align_y(Alignment::Center).padding(item_padding)
+        )
+        .width(Length::Fill)
+        .class(md_style)
+        .on_press(Message::ChangeCardType(card_id, CardType::Markdown));
+
+        let sep = container(Space::with_height(1))
+            .width(Length::Fill).height(1)
+            .style(move |_: &IcedTheme| container::Style {
+                background: Some(iced::Background::Color(separator_color)),
+                ..Default::default()
+            });
+
+        container(column![text_btn, sep, md_btn].padding(4.0)).into()
     }
 
     fn build_card_icon_menu(&self) -> Element<Message> {
@@ -4359,176 +4629,6 @@ impl Cards {
 
         container(content)
             .into()
-    }
-
-    fn build_card_toolbar(&self, card_id: usize) -> Element<Message> {
-        let btn_style = CardButtonStyle {
-            background: Color::TRANSPARENT,
-            background_hovered: self.theme.accent_bg_from(self.accent_color),
-            text_color: self.theme.button_text(),
-            border_color: Color::TRANSPARENT,
-            shadow_color: Color::TRANSPARENT,
-        };
-
-        // Markdown formatting buttons - all square (32×32)
-        let bold_btn = button(
-            container(
-                text("B").size(14).font(iced::Font {
-                    weight: iced::font::Weight::Bold,
-                    ..Default::default()
-                })
-            )
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::FormatBold);
-
-        let italic_btn = button(
-            container(
-                text("I").size(14).font(iced::Font {
-                    style: iced::font::Style::Italic,
-                    ..Default::default()
-                })
-            )
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::FormatItalic);
-
-        let strike_btn = button(
-            container(text("S̶").size(14))
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::FormatStrikethrough);
-
-        let code_btn = button(
-            container(text("<>").size(12))
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::FormatCode);
-
-        let code_block_btn = button(
-            container(text("{ }").size(12))
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::FormatCodeBlock);
-
-        let heading_btn = button(
-            container(text("H").size(14).font(iced::Font {
-                weight: iced::font::Weight::Bold,
-                ..Default::default()
-            }))
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::FormatHeading);
-
-        let bullet_btn = button(
-            container(text("•").size(16))
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::FormatBullet);
-
-        // Vertical separator
-        let separator_color = self.theme.separator_color();
-        let separator = container(Space::new(Length::Fixed(1.0), Length::Fixed(24.0)))
-            .width(1)
-            .height(24)
-            .style(move |_theme: &IcedTheme| {
-                container::Style {
-                    background: Some(iced::Background::Color(separator_color)),
-                    border: Border::default(),
-                    shadow: Shadow::default(),
-                    text_color: None,
-                }
-            });
-
-        // Card management buttons - square (32×32)
-        let icon_color = self.theme.icon_color();
-
-        let duplicate_btn = button(
-            container(
-                svg(self.icon_duplicate.clone())
-                    .width(20)
-                    .height(20)
-                    .class(SvgStyle { color: icon_color })
-            )
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::DuplicateCard(card_id));
-
-        let delete_btn = button(
-            container(
-                svg(self.icon_delete.clone())
-                    .width(20)
-                    .height(20)
-                    .class(SvgStyle { color: icon_color })
-            )
-            .width(32)
-            .height(32)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-        )
-        .class(btn_style.clone())
-        .on_press(Message::DeleteCard(card_id));
-
-        let bg_color = self.theme.sidebar_background();
-
-        container(
-            row![
-                bold_btn,
-                italic_btn,
-                strike_btn,
-                code_btn,
-                code_block_btn,
-                heading_btn,
-                bullet_btn,
-                separator,
-                duplicate_btn,
-                delete_btn,
-            ]
-            .spacing(2)
-            .padding(6)
-            .align_y(Alignment::Center)
-        )
-        .style(move |_theme: &IcedTheme| {
-            container::Style {
-                background: Some(iced::Background::Color(bg_color)),
-                border: Border::default(),
-                shadow: Shadow::default(),
-                text_color: None,
-            }
-        })
-        .into()
     }
 
     fn build_settings_content(&self) -> Element<Message> {

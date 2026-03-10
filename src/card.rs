@@ -1,6 +1,42 @@
 use iced::{Color, Point, Rectangle};
 use crate::custom_text_editor::CustomTextEditor;
-use crate::text_renderer::CheckboxPosition;
+use crate::text_renderer::{CheckboxPosition, LinkPosition};
+
+/// The display / editing mode of a card.
+/// Keep this as a flat enum so it's easy to add new types later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CardType {
+    /// Plain text — no markdown rendering, just raw text.
+    #[default]
+    Text,
+    /// Full markdown — rendered with the markdown parser.
+    Markdown,
+}
+
+impl CardType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            CardType::Text => "Text",
+            CardType::Markdown => "Markdown",
+        }
+    }
+
+    /// Serialize to a stable string (for workspace files).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CardType::Text => "Text",
+            CardType::Markdown => "Markdown",
+        }
+    }
+
+    /// Parse from the serialized string; unknown values fall back to Text.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "Markdown" => CardType::Markdown,
+            _ => CardType::Text,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Card {
@@ -13,10 +49,12 @@ pub struct Card {
     pub target_height: f32,
     pub icon: CardIcon,
     pub color: Color,
+    pub card_type: CardType,
     pub is_dragging: bool,
     pub content: CustomTextEditor,
     pub is_editing: bool,
-    pub checkbox_positions: Vec<CheckboxPosition>, // Track checkbox positions for interaction
+    pub checkbox_positions: Vec<CheckboxPosition>,
+    pub link_positions: Vec<LinkPosition>,
 }
 
 impl Clone for Card {
@@ -31,10 +69,12 @@ impl Clone for Card {
             target_height: self.target_height,
             icon: self.icon,
             color: self.color,
+            card_type: self.card_type,
             is_dragging: self.is_dragging,
             content: self.content.clone(),
             is_editing: self.is_editing,
             checkbox_positions: self.checkbox_positions.clone(),
+            link_positions: self.link_positions.clone(),
         }
     }
 }
@@ -525,10 +565,12 @@ impl Card {
             target_height: Self::MIN_HEIGHT,
             icon: CardIcon::Default,
             color: Color::from_rgb8(124, 92, 252), // Default purple (matches app accent)
+            card_type: CardType::Text,
             is_dragging: false,
             content: CustomTextEditor::new(),
             is_editing: false,
             checkbox_positions: Vec::new(),
+            link_positions: Vec::new(),
         }
     }
 

@@ -5,6 +5,7 @@ use iced::{Color, Point};
 pub struct TextSegment {
     pub text: String,
     pub style: TextStyle,
+    pub link_url: Option<String>,
 }
 
 /// Represents a checkbox item
@@ -23,6 +24,7 @@ pub struct TextStyle {
     pub strikethrough: bool,
     pub underline: bool,
     pub is_code: bool,
+    pub is_link: bool,
     pub color: Option<Color>, // None means use default
 }
 
@@ -41,6 +43,7 @@ impl TextStyle {
             strikethrough: false,
             underline: false,
             is_code: false,
+            is_link: false,
             color: None,
         }
     }
@@ -112,6 +115,12 @@ impl TextStyle {
         self.underline = underline;
         self
     }
+
+    pub fn with_link(mut self) -> Self {
+        self.is_link = true;
+        self.underline = true;
+        self
+    }
 }
 
 /// Represents a line of text segments
@@ -122,6 +131,7 @@ pub struct TextLine {
     pub spacing_before: f32,
     pub spacing_after: f32,
     pub checkbox: Option<CheckboxItem>, // If this line has a checkbox
+    pub is_rule: bool, // Horizontal rule — rendered as a full-width line
 }
 
 impl Default for TextLine {
@@ -132,6 +142,7 @@ impl Default for TextLine {
             spacing_before: 0.0,
             spacing_after: 0.0,
             checkbox: None,
+            is_rule: false,
         }
     }
 }
@@ -157,7 +168,11 @@ impl TextLine {
     }
 
     pub fn add_segment(&mut self, text: String, style: TextStyle) {
-        self.segments.push(TextSegment { text, style });
+        self.segments.push(TextSegment { text, style, link_url: None });
+    }
+
+    pub fn add_link_segment(&mut self, text: String, style: TextStyle, url: String) {
+        self.segments.push(TextSegment { text, style, link_url: Some(url) });
     }
 
     pub fn with_checkbox(mut self, checked: bool, line_index: usize) -> Self {
@@ -165,8 +180,13 @@ impl TextLine {
         self
     }
 
+    pub fn as_rule(mut self) -> Self {
+        self.is_rule = true;
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.segments.is_empty() || self.segments.iter().all(|s| s.text.trim().is_empty())
+        self.is_rule == false && (self.segments.is_empty() || self.segments.iter().all(|s| s.text.trim().is_empty()))
     }
 }
 

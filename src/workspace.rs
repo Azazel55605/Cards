@@ -65,6 +65,13 @@ pub struct CardData {
     pub color_g: u8,
     pub color_b: u8,
     pub color_a: u8,
+    /// Card type: "Text" or "Markdown". Defaults to "Text" when missing (old files).
+    #[serde(default = "default_card_type")]
+    pub card_type: String,
+}
+
+fn default_card_type() -> String {
+    "Text".to_string()
 }
 
 // ── Conversion helpers ──────────────────────────────────────────────────────
@@ -85,6 +92,7 @@ impl CardData {
             color_g: (c.g * 255.0) as u8,
             color_b: (c.b * 255.0) as u8,
             color_a: (c.a * 255.0) as u8,
+            card_type: card.card_type.as_str().to_string(),
         }
     }
 
@@ -96,6 +104,10 @@ impl CardData {
         // Parse the Debug-repr string back into a CardIcon.
         // If unknown (icon added in a newer version), fall back to Default.
         parse_card_icon(&self.icon)
+    }
+
+    pub fn to_card_type(&self) -> crate::card::CardType {
+        crate::card::CardType::from_str(&self.card_type)
     }
 }
 

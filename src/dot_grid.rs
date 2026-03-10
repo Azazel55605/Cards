@@ -1,6 +1,6 @@
 use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder, gradient};
 use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector};
-use crate::card::Card;
+use crate::card::{Card, CardType};
 use crate::markdown::MarkdownRenderer;
 
 pub struct DotGridState {
@@ -306,63 +306,58 @@ impl DotGrid {
     /// Update checkbox positions for a card after rendering
     pub fn update_card_checkbox_positions(&mut self, card_id: usize) {
         use crate::text_processor::TextProcessor;
+        use crate::card::CardType;
 
         if let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) {
             card.checkbox_positions.clear();
 
             if !card.is_editing {
                 let content_text = card.content.text();
+                let card_type = card.card_type;
                 if !content_text.is_empty() {
-                    // Process the text to get the document (matches what renderer does)
                     let processor = TextProcessor::with_font_size(self.font_size);
-                    let document = processor.process(&content_text);
+                    let document = if card_type == CardType::Markdown {
+                        processor.parse_full_markdown(&content_text)
+                    } else {
+                        processor.process(&content_text)
+                    };
 
-                    // Calculate checkbox positions exactly as the renderer does
+                    // Store positions relative to card origin (no canvas offset).
+                    // The offset is applied at hit-test time so panning never invalidates them.
                     let top_bar_height = 30.0;
-                    let card_screen_x = card.current_position.x + self.offset.x;
-                    let card_screen_y = card.current_position.y + self.offset.y;
                     let text_x = 10.0;
                     let text_y = top_bar_height + 10.0;
-
-                    let mut current_y = 0.0;
+                    let mut current_y = 0.0f32;
 
                     for line in &document.lines {
-                        if line.is_empty() {
-                            current_y += 8.0;
+                        if line.is_rule {
+                            current_y += line.spacing_before + 8.0 + line.spacing_after;
                             continue;
                         }
-
-                        // Add spacing before line
+                        if line.is_empty() { current_y += 8.0; continue; }
                         current_y += line.spacing_before;
 
-                        // Calculate line height matching renderer logic
                         let max_size = line.segments.iter()
                             .map(|seg| seg.style.size)
                             .max_by(|a, b| a.partial_cmp(b).unwrap())
                             .unwrap_or(14.0);
                         let line_height = 21.0 * (max_size / 14.0);
 
-                        // If line has a checkbox, store its position
                         if let Some(checkbox) = &line.checkbox {
                             let checkbox_size = 14.0;
-                            let checkbox_x = text_x - 20.0 + line.indent;
-                            let checkbox_y = current_y + 2.0;
-
+                            // card-local rect
                             let checkbox_rect = Rectangle {
-                                x: card_screen_x + checkbox_x,
-                                y: card_screen_y + text_y + checkbox_y,
+                                x: card.current_position.x + text_x - 20.0 + line.indent,
+                                y: card.current_position.y + text_y + current_y + 2.0,
                                 width: checkbox_size,
                                 height: checkbox_size,
                             };
-
                             card.checkbox_positions.push(crate::text_renderer::CheckboxPosition {
                                 rect: checkbox_rect,
                                 line_index: checkbox.line_index,
                                 checked: checkbox.checked,
                             });
                         }
-
-                        // Update Y position
                         current_y += line_height + line.spacing_after;
                     }
                 }
@@ -370,39 +365,97 @@ impl DotGrid {
         }
     }
 
-    /// Check if a point clicks on a checkbox by computing positions on-the-fly
-    pub fn find_clicked_checkbox(&self, screen_pos: Point) -> Option<(usize, usize)> {
-        if self.debug_mode {
-            println!("DEBUG: find_clicked_checkbox at pos: {:?}", screen_pos);
-        }
+    /// Update the stored link positions for a Markdown card (called after content changes)
+    pub fn update_card_link_positions(&mut self, card_id: usize) {
+        use crate::text_processor::TextProcessor;
+        use crate::card::CardType;
 
-        // Use the stored checkbox positions from rendering
-        // These are the ACTUAL positions where checkboxes were rendered
+        if let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) {
+            card.link_positions.clear();
+            if card.card_type != CardType::Markdown || card.is_editing {
+                return;
+            }
+            let content = card.content.text();
+            if content.is_empty() { return; }
+
+            let top_bar_height = 30.0;
+            // Card-local origin (no canvas offset — applied at hit-test time)
+            let text_x = card.current_position.x + 10.0;
+            let text_y = card.current_position.y + top_bar_height + 10.0;
+
+            let processor = TextProcessor::with_font_size(self.font_size);
+            let document = processor.parse_full_markdown(&content);
+
+            let mut current_y = 0.0_f32;
+            for line in &document.lines {
+                if line.is_rule {
+                    current_y += line.spacing_before + 8.0 + line.spacing_after;
+                    continue;
+                }
+                if line.is_empty() { current_y += 8.0; continue; }
+                current_y += line.spacing_before;
+                let max_size = line.segments.iter().map(|s| s.style.size)
+                    .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(14.0);
+                let line_height = 21.0 * (max_size / 14.0);
+                let mut current_x = 0.0_f32;
+                for seg in &line.segments {
+                    if let Some(url) = &seg.link_url {
+                        let char_width = seg.style.size * 0.55;
+                        let seg_width = seg.text.chars().count() as f32 * char_width;
+                        card.link_positions.push(crate::text_renderer::LinkPosition {
+                            rect: iced::Rectangle {
+                                x: text_x + line.indent + current_x,
+                                y: text_y + current_y,
+                                width: seg_width,
+                                height: line_height,
+                            },
+                            url: url.clone(),
+                        });
+                    }
+                    let char_width = seg.style.size * 0.55;
+                    current_x += seg.text.chars().count() as f32 * char_width;
+                }
+                current_y += line_height + line.spacing_after;
+            }
+        }
+    }
+
+    /// Find a link at the given screen position
+    pub fn find_clicked_link(&self, screen_pos: Point) -> Option<String> {
         for card in &self.cards {
             if !card.is_editing {
-                if self.debug_mode {
-                    println!("DEBUG: Checking card {} with {} stored checkbox positions",
-                        card.id, card.checkbox_positions.len());
-                }
-
-                for checkbox_pos in &card.checkbox_positions {
-                    if self.debug_mode {
-                        println!("DEBUG: Stored checkbox line_index={}, rect={:?}",
-                            checkbox_pos.line_index, checkbox_pos.rect);
-                    }
-
-                    if checkbox_pos.rect.contains(screen_pos) {
-                        if self.debug_mode {
-                            println!("DEBUG: CHECKBOX CLICKED! Returning line_index={}", checkbox_pos.line_index);
-                        }
-                        return Some((card.id, checkbox_pos.line_index));
+                for lp in &card.link_positions {
+                    // link_positions are card-local; add canvas offset for screen test
+                    let screen_rect = Rectangle {
+                        x: lp.rect.x + self.offset.x,
+                        y: lp.rect.y + self.offset.y,
+                        ..lp.rect
+                    };
+                    if screen_rect.contains(screen_pos) {
+                        return Some(lp.url.clone());
                     }
                 }
             }
         }
+        None
+    }
 
-        if self.debug_mode {
-            println!("DEBUG: No checkbox found at click position");
+    /// Check if a point clicks on a checkbox
+    pub fn find_clicked_checkbox(&self, screen_pos: Point) -> Option<(usize, usize)> {
+        for card in &self.cards {
+            if !card.is_editing {
+                for cp in &card.checkbox_positions {
+                    // checkbox_positions are card-local; add canvas offset for screen test
+                    let screen_rect = Rectangle {
+                        x: cp.rect.x + self.offset.x,
+                        y: cp.rect.y + self.offset.y,
+                        ..cp.rect
+                    };
+                    if screen_rect.contains(screen_pos) {
+                        return Some((card.id, cp.line_index));
+                    }
+                }
+            }
         }
         None
     }
@@ -554,23 +607,46 @@ impl DotGrid {
                     selection_color,
                 );
             } else if !content_text.is_empty() {
-                // Render as markdown when not editing
+                // Render based on card type
                 let text_x = card_rect.x + 10.0;
                 let text_y = card_rect.y + top_bar_height + 10.0;
                 let max_width = card_rect.width - 20.0;
                 let max_height = card_rect.height - top_bar_height - 20.0;
 
-                let renderer = MarkdownRenderer::with_fonts_size_and_height(
-                    self.card_text, 
-                    max_width,
-                    max_height,
-                    self.font, 
-                    self.font_size
-                );
-                let (_height, _checkbox_positions) = renderer.render(frame, &content_text, Point::new(text_x, text_y));
-
-                // Note: Checkbox positions are updated via update_card_checkbox_positions()
-                // which is called after editing or content changes
+                match card.card_type {
+                    CardType::Markdown => {
+                        // Full markdown rendering — entire content treated as markdown
+                        let renderer = MarkdownRenderer::with_fonts_size_height_and_link(
+                            self.card_text,
+                            max_width,
+                            max_height,
+                            self.font,
+                            self.font_size,
+                            card.color, // use the card's own colour for links
+                        );
+                        let (_height, _checkbox_positions, _link_positions) = renderer.render_as_markdown(frame, &content_text, Point::new(text_x, text_y));
+                    }
+                    CardType::Text => {
+                        // Plain text rendering — no markdown parsing
+                        use crate::text_document::{TextDocument, TextLine, TextStyle};
+                        use crate::text_renderer::TextRenderer;
+                        let default_style = TextStyle::with_base_size(self.font_size);
+                        let mut doc = TextDocument::new();
+                        for line in content_text.lines() {
+                            let mut text_line = TextLine::new();
+                            text_line.add_segment(line.to_string(), default_style);
+                            doc.add_line(text_line);
+                        }
+                        let renderer = TextRenderer::with_fonts_and_height(
+                            self.card_text,
+                            max_width,
+                            max_height,
+                            self.font,
+                            self.font,
+                        );
+                        let _ = renderer.render(frame, &doc, Point::new(text_x, text_y));
+                    }
+                }
             }
 
             // Draw editing indicator (use card's color for border when editing)
@@ -716,6 +792,7 @@ pub enum DotGridMessage {
     Pan(Vector),
     RightClick(Point),
     CardRightClickIcon(usize),
+    CardTypeIconClick(usize),
     CardLeftClickBar(usize, Point),
     CardLeftClickBody(usize),
     CardTextClick(usize, Point), // (card_id, click_position) - for text selection
@@ -726,6 +803,7 @@ pub enum DotGridMessage {
     CardResize(usize, Point),
     CardResizeEnd(usize),
     CheckboxToggle(usize, usize), // (card_id, line_index)
+    LinkClick(String),            // url to open
 }
 
 impl Program<DotGridMessage> for &DotGrid {
@@ -794,16 +872,34 @@ impl Program<DotGridMessage> for &DotGrid {
                                     };
 
                                     if top_bar_bounds.contains(pos) {
-                                        // Don't start drag if clicking on icon
+                                        // Left user icon — opens icon/colour picker
                                         let icon_bounds = Rectangle {
                                             x: screen_bounds.x + 5.0,
                                             y: screen_bounds.y + 5.0,
                                             width: 20.0,
                                             height: 20.0,
                                         };
+                                        // Right type icon — opens card-type menu
+                                        let type_icon_bounds = Rectangle {
+                                            x: screen_bounds.x + screen_bounds.width - 26.0,
+                                            y: screen_bounds.y + 5.0,
+                                            width: 20.0,
+                                            height: 20.0,
+                                        };
 
-                                        if !icon_bounds.contains(pos) {
-                                            // Allow dragging regardless of editing state
+                                        if type_icon_bounds.contains(pos) {
+                                            return (
+                                                iced::widget::canvas::event::Status::Captured,
+                                                Some(DotGridMessage::CardTypeIconClick(card.id)),
+                                            );
+                                        } else if icon_bounds.contains(pos) {
+                                            // Left icon left-click → open icon/colour picker
+                                            return (
+                                                iced::widget::canvas::event::Status::Captured,
+                                                Some(DotGridMessage::CardRightClickIcon(card.id)),
+                                            );
+                                        } else {
+                                            // Drag the card
                                             state.dragging_card = Some(card.id);
                                             state.drag_offset = Some(Point::new(
                                                 pos.x - screen_bounds.x,
@@ -840,6 +936,14 @@ impl Program<DotGridMessage> for &DotGrid {
                                             return (
                                                 iced::widget::canvas::event::Status::Captured,
                                                 Some(DotGridMessage::CardTextClick(card.id, pos)),
+                                            );
+                                        }
+
+                                        // Check if clicking on a link
+                                        if let Some(url) = self.find_clicked_link(pos) {
+                                            return (
+                                                iced::widget::canvas::event::Status::Captured,
+                                                Some(DotGridMessage::LinkClick(url)),
                                             );
                                         }
 
@@ -1227,6 +1331,40 @@ impl Program<DotGridMessage> for &DotGrid {
                         return mouse::Interaction::ResizingDiagonallyDown;
                     }
 
+                    // Type icon (right side of top bar) — pointer
+                    let type_icon_bounds = Rectangle {
+                        x: screen_bounds.x + screen_bounds.width - 26.0,
+                        y: screen_bounds.y + 5.0,
+                        width: 20.0,
+                        height: 20.0,
+                    };
+                    if type_icon_bounds.contains(pos) {
+                        return mouse::Interaction::Pointer;
+                    }
+
+                    // Left (user) icon — pointer
+                    let left_icon_bounds = Rectangle {
+                        x: screen_bounds.x + 5.0,
+                        y: screen_bounds.y + 5.0,
+                        width: 20.0,
+                        height: 20.0,
+                    };
+                    if left_icon_bounds.contains(pos) {
+                        return mouse::Interaction::Pointer;
+                    }
+
+                    // Link hit-rects — pointer (positions are card-local, add offset)
+                    for lp in &card.link_positions {
+                        let screen_rect = Rectangle {
+                            x: lp.rect.x + self.offset.x,
+                            y: lp.rect.y + self.offset.y,
+                            ..lp.rect
+                        };
+                        if screen_rect.contains(pos) {
+                            return mouse::Interaction::Pointer;
+                        }
+                    }
+
                     // Check top bar for dragging
                     let top_bar_bounds = Rectangle {
                         x: screen_bounds.x,
@@ -1242,7 +1380,6 @@ impl Program<DotGridMessage> for &DotGrid {
                             width: 20.0,
                             height: 20.0,
                         };
-
                         if !icon_bounds.contains(pos) {
                             return mouse::Interaction::Grabbing;
                         }
@@ -1264,3 +1401,12 @@ impl Program<DotGridMessage> for &DotGrid {
         mouse::Interaction::default()
     }
 }
+
+
+
+
+
+
+
+
+

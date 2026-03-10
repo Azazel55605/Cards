@@ -54,7 +54,9 @@ impl MarkdownParser {
         let mut in_code_block = false;
         let mut code_block_lang: Option<String> = None;
         let mut code_block_content = String::new();
-        let mut checkbox_counter = 0; // Track checkbox index for proper identification
+        let mut checkbox_counter = 0;
+        let mut in_link = false;
+        let mut current_link_url: Option<String> = None;
 
         for event in parser {
             match event {
@@ -90,6 +92,12 @@ impl MarkdownParser {
                         Tag::Strikethrough => {
                             self.flush_text_to_line(&mut current_line, &mut text_buffer, &current_style);
                             current_style = current_style.with_strikethrough(true);
+                        }
+                        Tag::Link(_, url, _) => {
+                            self.flush_text_to_line(&mut current_line, &mut text_buffer, &current_style);
+                            in_link = true;
+                            current_link_url = Some(url.to_string());
+                            current_style = current_style.with_link();
                         }
                         Tag::List(_) => {
                             self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
@@ -147,6 +155,24 @@ impl MarkdownParser {
                         Tag::Strikethrough => {
                             self.flush_text_to_line(&mut current_line, &mut text_buffer, &current_style);
                             current_style = current_style.with_strikethrough(false);
+                        }
+                        Tag::Link(_, _, _) => {
+                            // Flush link text with its URL
+                            if !text_buffer.is_empty() {
+                                if let Some(url) = &current_link_url {
+                                    current_line.add_link_segment(text_buffer.clone(), current_style, url.clone());
+                                } else {
+                                    current_line.add_segment(text_buffer.clone(), current_style);
+                                }
+                                text_buffer.clear();
+                            }
+                            in_link = false;
+                            current_link_url = None;
+                            current_style = TextStyle {
+                                is_link: false,
+                                underline: false,
+                                ..current_style
+                            };
                         }
                         Tag::Item => {
                             self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
@@ -207,9 +233,11 @@ impl MarkdownParser {
                 }
                 Event::Rule => {
                     self.flush_current_line(&mut document, &mut current_line, &mut text_buffer, &current_style);
-                    // Add a horizontal rule line (represented as special text for now)
-                    let mut rule_line = TextLine::new().with_spacing_before(8.0).with_spacing_after(8.0);
-                    rule_line.add_segment("─".repeat(50), TextStyle::with_base_size(self.base_font_size));
+                    // is_rule=true — the renderer will draw a full-width line
+                    let rule_line = TextLine::new()
+                        .with_spacing_before(8.0)
+                        .with_spacing_after(8.0)
+                        .as_rule();
                     document.add_line(rule_line);
                     current_line = TextLine::new();
                 }

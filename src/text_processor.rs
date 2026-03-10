@@ -21,6 +21,11 @@ impl TextProcessor {
         self.markdown_parser.set_base_font_size(font_size);
     }
 
+    /// Parse the entire string as markdown (no <md> tag required).
+    pub fn parse_full_markdown(&self, text: &str) -> TextDocument {
+        self.markdown_parser.parse(text)
+    }
+
     /// Process text that may contain <md>...</md> tags
     pub fn process(&self, text: &str) -> TextDocument {
         let mut document = TextDocument::new();
