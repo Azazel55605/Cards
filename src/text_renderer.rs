@@ -21,6 +21,7 @@ pub struct LinkPosition {
 pub struct TextRenderer {
     pub text_color: Color,
     pub link_color: Color,
+    pub code_bg_color: Color,
     pub max_width: f32,
     pub max_height: Option<f32>, // None = unlimited, Some(height) = clip at height
     pub font_regular: iced::Font,
@@ -32,6 +33,7 @@ impl TextRenderer {
         Self {
             text_color,
             link_color: Color::from_rgb8(88, 166, 255), // default blue
+            code_bg_color: Color::from_rgba(0.5, 0.5, 0.5, 0.15),
             max_width,
             max_height: None,
             font_regular: iced::Font::MONOSPACE,
@@ -43,6 +45,7 @@ impl TextRenderer {
         Self {
             text_color,
             link_color: Color::from_rgb8(88, 166, 255),
+            code_bg_color: Color::from_rgba(0.5, 0.5, 0.5, 0.15),
             max_width,
             max_height: None,
             font_regular,
@@ -60,6 +63,7 @@ impl TextRenderer {
         Self {
             text_color,
             link_color: Color::from_rgb8(88, 166, 255),
+            code_bg_color: Color::from_rgba(0.5, 0.5, 0.5, 0.15),
             max_width,
             max_height: Some(max_height),
             font_regular,
@@ -69,6 +73,11 @@ impl TextRenderer {
 
     pub fn with_link_color(mut self, color: Color) -> Self {
         self.link_color = color;
+        self
+    }
+
+    pub fn with_code_bg(mut self, color: Color) -> Self {
+        self.code_bg_color = color;
         self
     }
 
@@ -332,6 +341,30 @@ impl TextRenderer {
             }
         });
 
+        let char_width = style.size * 0.55;
+        let text_width = text.len() as f32 * char_width;
+
+        // Draw inline code background before the text
+        if style.is_code {
+            let pad_x = 3.0_f32;
+            let pad_y = 1.0_f32;
+            let bg_rect = iced::Rectangle {
+                x: x - pad_x,
+                y: y - pad_y,
+                width: text_width + pad_x * 2.0,
+                height: style.size * 1.3 + pad_y * 2.0,
+            };
+            let bg_path = Path::rounded_rectangle(
+                iced::Point::new(bg_rect.x, bg_rect.y),
+                iced::Size::new(bg_rect.width, bg_rect.height),
+                3.0_f32.into(),
+            );
+            frame.fill(&bg_path, Fill {
+                style: iced::widget::canvas::Style::Solid(self.code_bg_color),
+                ..Default::default()
+            });
+        }
+
         // Render text
         frame.fill_text(Text {
             content: text.to_string(),
@@ -345,8 +378,6 @@ impl TextRenderer {
             ..Default::default()
         });
 
-        let char_width = style.size * 0.55;
-        let text_width = text.len() as f32 * char_width;
 
         // Render strikethrough
         if style.strikethrough {

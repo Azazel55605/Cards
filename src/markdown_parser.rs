@@ -222,7 +222,7 @@ impl MarkdownParser {
                 Event::Code(code) => {
                     self.flush_text_to_line(&mut current_line, &mut text_buffer, &current_style);
                     let code_style = TextStyle::code();
-                    current_line.add_segment(format!("`{}`", code), code_style);
+                    current_line.add_segment(code.to_string(), code_style);
                 }
                 Event::SoftBreak => {
                     text_buffer.push(' ');

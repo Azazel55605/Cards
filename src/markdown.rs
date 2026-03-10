@@ -62,6 +62,10 @@ impl MarkdownRenderer {
         self.text_processor.set_font_size(font_size);
     }
 
+    pub fn set_code_bg(&mut self, color: Color) {
+        self.text_renderer.code_bg_color = color;
+    }
+
     /// Render text with markdown support via <md> tags
     pub fn render(&self, frame: &mut Frame, text: &str, position: Point) -> (f32, Vec<CheckboxPosition>, Vec<LinkPosition>) {
         // Process text (handles both plain text and <md> tags)

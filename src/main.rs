@@ -4586,7 +4586,7 @@ impl Cards {
                             container::Style {
                                 background: Some(iced::Background::Color(color)),
                                 border: Border {
-                                    radius: 15.0.into(), // Make it circular
+                                    radius: 6.0.into(), // Rounded square to match settings
                                     width: 2.0,
                                     color: if color == card_color {
                                         border_color

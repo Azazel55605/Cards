@@ -596,8 +596,9 @@ impl DotGrid {
                     Color::BLACK
                 };
                 
-                // Selection color — accent glow (rgba 124,92,252, 0.22)
-                let selection_color = Color::from_rgba8(124, 92, 252, 0.22);
+                // Selection color — derived from the app accent colour
+                let ac = self.accent_color;
+                let selection_color = Color { a: 0.28, ..ac };
 
                 card.content.render(
                     frame,
@@ -616,6 +617,8 @@ impl DotGrid {
                 match card.card_type {
                     CardType::Markdown => {
                         // Full markdown rendering — entire content treated as markdown
+                        // Code bg: semi-transparent overlay relative to card text color
+                        let code_bg = Color { a: 0.12, ..self.card_text };
                         let renderer = MarkdownRenderer::with_fonts_size_height_and_link(
                             self.card_text,
                             max_width,
@@ -624,6 +627,8 @@ impl DotGrid {
                             self.font_size,
                             card.color, // use the card's own colour for links
                         );
+                        let mut renderer = renderer;
+                        renderer.set_code_bg(code_bg);
                         let (_height, _checkbox_positions, _link_positions) = renderer.render_as_markdown(frame, &content_text, Point::new(text_x, text_y));
                     }
                     CardType::Text => {
@@ -1359,6 +1364,18 @@ impl Program<DotGridMessage> for &DotGrid {
                             x: lp.rect.x + self.offset.x,
                             y: lp.rect.y + self.offset.y,
                             ..lp.rect
+                        };
+                        if screen_rect.contains(pos) {
+                            return mouse::Interaction::Pointer;
+                        }
+                    }
+
+                    // Checkbox hit-rects — pointer
+                    for cp in &card.checkbox_positions {
+                        let screen_rect = Rectangle {
+                            x: cp.rect.x + self.offset.x,
+                            y: cp.rect.y + self.offset.y,
+                            ..cp.rect
                         };
                         if screen_rect.contains(pos) {
                             return mouse::Interaction::Pointer;
