@@ -41,11 +41,56 @@ pub struct WorkspaceFile {
     pub canvas_offset_y: f32,
 }
 
+fn default_line_style() -> String { "Solid".to_string() }
+
+/// Serialisable snapshot of a card connection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionData {
+    pub from_card:  usize,
+    pub from_side:  String,
+    pub to_card:    usize,
+    pub to_side:    String,
+    #[serde(default = "default_line_style")]
+    pub line_style: String,
+    #[serde(default)]
+    pub arrow_from: bool,
+    #[serde(default)]
+    pub arrow_to:   bool,
+}
+
+impl ConnectionData {
+    pub fn from_connection(c: &crate::card::Connection) -> Self {
+        Self {
+            from_card:  c.from_card,
+            from_side:  c.from_side.as_str().to_string(),
+            to_card:    c.to_card,
+            to_side:    c.to_side.as_str().to_string(),
+            line_style: c.line_style.as_str().to_string(),
+            arrow_from: c.arrow_from,
+            arrow_to:   c.arrow_to,
+        }
+    }
+    pub fn to_connection(&self) -> crate::card::Connection {
+        use crate::card::{CardSide, LineStyle};
+        crate::card::Connection {
+            from_card:  self.from_card,
+            from_side:  CardSide::from_str(&self.from_side),
+            to_card:    self.to_card,
+            to_side:    CardSide::from_str(&self.to_side),
+            line_style: LineStyle::from_str(&self.line_style),
+            arrow_from: self.arrow_from,
+            arrow_to:   self.arrow_to,
+        }
+    }
+}
+
 /// One board = a named collection of cards
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardData {
     pub name: String,
     pub cards: Vec<CardData>,
+    #[serde(default)]
+    pub connections: Vec<ConnectionData>,
 }
 
 /// Serialisable snapshot of a single card
@@ -291,6 +336,7 @@ impl WorkspaceFile {
             boards: vec![BoardData {
                 name: "Board 1".to_string(),
                 cards: Vec::new(),
+                connections: Vec::new(),
             }],
             active_board_index: 0,
             canvas_offset_x: 0.0,

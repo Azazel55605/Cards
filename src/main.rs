@@ -16,6 +16,7 @@ mod custom_text_editor;
 mod card_toolbar;
 mod card_layer;
 mod card_shelf;
+mod connection_toolbar;
 mod icon_util;
 mod positioned;
 mod text_document;
@@ -48,7 +49,7 @@ use config::{Config, FontFamily, AccentColor};
 use context_menu::ContextMenu;
 use app_menu::{AppMenu, AppMenuItem};
 use card::{Card, CardIcon, CardType};
-use workspace::{WorkspaceFile, BoardData, CardData};
+use workspace::{WorkspaceFile, BoardData, CardData, ConnectionData};
 use workspace_modal::{WorkspaceModalState, WorkspaceModalMessage};
 use file_picker::{FilePickerState, FilePickerMessage, FilePickerMode};
 use import_export_modal::{ImportExportState, ImportExportMessage, IEKind, ImportExportResult};
@@ -279,6 +280,11 @@ pub enum Message {
     MenuImportBoard,
     ImportExport(ImportExportMessage),
     ShelfDragStart(CardType, Point),
+    // Connection toolbar actions
+    ConnSetLineStyle { from_card: usize, from_side: card::CardSide, to_card: usize, to_side: card::CardSide, style: card::LineStyle },
+    ConnToggleArrowFrom { from_card: usize, from_side: card::CardSide, to_card: usize, to_side: card::CardSide },
+    ConnToggleArrowTo   { from_card: usize, from_side: card::CardSide, to_card: usize, to_side: card::CardSide },
+    ConnDelete          { from_card: usize, from_side: card::CardSide, to_card: usize, to_side: card::CardSide },
 }
 
 struct Cards {
@@ -328,6 +334,8 @@ struct Cards {
     editing_board_index: Option<usize>,  // Track which board is being renamed
     board_rename_value: String,  // Current value during rename
     board_cards: HashMap<usize, Vec<card::Card>>,  // Store cards for each board
+    board_connections: HashMap<usize, Vec<card::Connection>>,  // Store connections per board
+    selected_conn: Option<card::Connection>,  // Currently selected connection (click-to-select)
     // Board animations
     board_list_animating: bool,  // Animation for add/delete/reorder
     board_list_animation_progress: f32,
@@ -471,6 +479,12 @@ impl Cards {
                 map.insert(0, Vec::new());  // Initialize first board with empty cards
                 map
             },
+            board_connections: {
+                let mut map = HashMap::new();
+                map.insert(0, Vec::new());
+                map
+            },
+            selected_conn: None,
             board_list_animating: false,
             board_list_animation_progress: 0.0,
             board_list_animation_type: BoardAnimationType::None,
@@ -701,6 +715,12 @@ impl Cards {
                     self.dot_grid.clear_cards_cache();
                 }
 
+                // Advance connection animation when a drag is in progress
+                if self.dot_grid.pending_conn().is_some() {
+                    self.dot_grid.advance_conn_anim(delta_time);
+                    self.dot_grid.clear_cards_cache();
+                }
+
                 let animation_duration = ANIMATION_DURATION_MS;
 
                 // Animate sidebar
@@ -889,6 +909,7 @@ impl Cards {
                         self.pending_card_position = None;
                         self.card_icon_menu_position = None;
                         self.card_icon_menu_card_id = None;
+                        self.selected_conn = None;
                         self.canvas_offset.x += delta.x;
                         self.canvas_offset.y += delta.y;
                         self.dot_grid.set_offset(self.canvas_offset);
@@ -939,6 +960,7 @@ impl Cards {
                             card.is_editing = false;
                         }
                         self.editing_card_id = None;
+                        self.selected_conn = None;
                         self.last_drag_world_pos = None;
                         // Bring card to front so it renders on top while dragging
                         self.dot_grid.bring_card_to_front(card_id);
@@ -962,6 +984,7 @@ impl Cards {
                         self.dot_grid.clear_cards_cache();
                     }
                     DotGridMessage::CardLeftClickBody(card_id) => {
+                        self.selected_conn = None;
                         // Special case: if card_id is usize::MAX, it means stop editing
                         if card_id == usize::MAX {
                             // Stop editing any card and update checkbox positions
@@ -1159,6 +1182,7 @@ impl Cards {
                         let _ = open::that(&url);
                     }
                     DotGridMessage::BoxSelectEnd(rect) => {
+                        self.selected_conn = None;
                         let canvas_offset = self.dot_grid.offset();
                         let mut ids = std::collections::HashSet::new();
                         for card in self.dot_grid.cards() {
@@ -1207,6 +1231,40 @@ impl Cards {
                                 self.dot_grid.clear_cards_cache();
                             }
                         }
+                    }
+                    DotGridMessage::DeleteConnection { from_card, from_side, to_card, to_side } => {
+                        self.dot_grid.connections_mut().retain(|c| {
+                            !(c.from_card == from_card && c.from_side == from_side
+                                && c.to_card == to_card && c.to_side == to_side)
+                        });
+                        self.selected_conn = None;
+                        self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
+                    }
+                    DotGridMessage::ConnectionClick { from_card, from_side, to_card, to_side } => {
+                        self.selected_conn = self.dot_grid.connections().iter().find(|c| {
+                            c.from_card == from_card && c.from_side == from_side
+                            && c.to_card == to_card && c.to_side == to_side
+                        }).copied();
+                        self.dot_grid.clear_cards_cache();
+                    }
+                    DotGridMessage::ConnectionComplete { from_card, from_side, to_card, to_side } => {
+                        use crate::card::Connection;
+                        // Prevent duplicate connections on the same pair of sides
+                        let already = self.dot_grid.connections().iter().any(|c| {
+                            (c.from_card == from_card && c.from_side == from_side
+                                && c.to_card == to_card && c.to_side == to_side)
+                            || (c.from_card == to_card && c.from_side == to_side
+                                && c.to_card == from_card && c.to_side == from_side)
+                        });
+                        if !already {
+                            self.dot_grid.add_connection(Connection::new(from_card, from_side, to_card, to_side));
+                            self.workspace_dirty = true;
+                        }
+                        self.dot_grid.clear_cards_cache();
+                    }
+                    DotGridMessage::ConnectionCancel => {
+                        self.dot_grid.clear_cards_cache();
                     }
                     DotGridMessage::CardTextDrag(card_id, drag_pos) => {
                         // Get canvas offset first (before borrowing cards_mut)
@@ -2032,10 +2090,14 @@ impl Cards {
                         // Save current board's cards
                         let current_cards = self.dot_grid.cards().iter().cloned().collect();
                         self.board_cards.insert(self.active_board_index, current_cards);
+                        // Save current board's connections
+                        let current_conns = self.dot_grid.connections().to_vec();
+                        self.board_connections.insert(self.active_board_index, current_conns);
 
                         // Clear any editing/selection state
                         self.editing_card_id = None;
                         self.selected_card_id = None;
+                        self.selected_conn = None;
                         self.card_icon_menu_position = None;
                         self.card_icon_menu_card_id = None;
 
@@ -2045,6 +2107,9 @@ impl Cards {
                         // Load new board's cards (or create empty vec if board doesn't exist in map)
                         let new_board_cards = self.board_cards.get(&index).cloned().unwrap_or_default();
                         self.load_cards_with_positions(new_board_cards);
+                        // Restore new board's connections
+                        let new_conns = self.board_connections.get(&index).cloned().unwrap_or_default();
+                        self.dot_grid.set_connections(new_conns);
 
                         // Persist changes immediately on board switch
                         self.save_workspace_to_file();
@@ -2490,6 +2555,47 @@ impl Cards {
             Message::ShelfDragStart(card_type, _pos) => {
                 self.shelf_drag = Some(card_type);
             }
+
+            Message::ConnSetLineStyle { from_card, from_side, to_card, to_side, style } => {
+                if let Some(conn) = self.dot_grid.connections_mut().iter_mut().find(|c| {
+                    c.from_card == from_card && c.from_side == from_side
+                    && c.to_card == to_card && c.to_side == to_side
+                }) {
+                    conn.line_style = style;
+                    self.workspace_dirty = true;
+                    self.dot_grid.clear_cards_cache();
+                }
+            }
+            Message::ConnToggleArrowFrom { from_card, from_side, to_card, to_side } => {
+                if let Some(conn) = self.dot_grid.connections_mut().iter_mut().find(|c| {
+                    c.from_card == from_card && c.from_side == from_side
+                    && c.to_card == to_card && c.to_side == to_side
+                }) {
+                    conn.arrow_from = !conn.arrow_from;
+                    self.workspace_dirty = true;
+                    self.dot_grid.clear_cards_cache();
+                }
+            }
+            Message::ConnToggleArrowTo { from_card, from_side, to_card, to_side } => {
+                if let Some(conn) = self.dot_grid.connections_mut().iter_mut().find(|c| {
+                    c.from_card == from_card && c.from_side == from_side
+                    && c.to_card == to_card && c.to_side == to_side
+                }) {
+                    conn.arrow_to = !conn.arrow_to;
+                    self.workspace_dirty = true;
+                    self.dot_grid.clear_cards_cache();
+                }
+            }
+            Message::ConnDelete { from_card, from_side, to_card, to_side } => {
+                self.dot_grid.connections_mut().retain(|c| {
+                    !(c.from_card == from_card && c.from_side == from_side
+                      && c.to_card == to_card && c.to_side == to_side)
+                });
+                self.selected_conn = None;
+                self.workspace_dirty = true;
+                self.dot_grid.clear_cards_cache();
+            }
+
             Message::ImportExport(ie_msg) => {
                 self.handle_import_export_message(ie_msg);
             }
@@ -2520,6 +2626,8 @@ impl Cards {
     fn save_current_board_cards(&mut self) {
         let current_cards = self.dot_grid.cards().iter().cloned().collect();
         self.board_cards.insert(self.active_board_index, current_cards);
+        let current_conns = self.dot_grid.connections().to_vec();
+        self.board_connections.insert(self.active_board_index, current_conns);
     }
 
     /// Load a set of cards into the canvas and rebuild checkbox + link hit-rects.
@@ -2792,6 +2900,9 @@ impl Cards {
                 cards.push(card);
             }
             self.board_cards.insert(board_idx, cards);
+
+            let connections = board.connections.iter().map(|c| c.to_connection()).collect();
+            self.board_connections.insert(board_idx, connections);
         }
 
         // Ensure at least one board always exists
@@ -2810,6 +2921,8 @@ impl Cards {
         // Load the restored board's cards into the canvas
         let active_cards = self.board_cards.get(&restored_board).cloned().unwrap_or_default();
         self.dot_grid.load_cards(active_cards);
+        let active_conns = self.board_connections.get(&restored_board).cloned().unwrap_or_default();
+        self.dot_grid.set_connections(active_conns);
         self.dot_grid.clear_cards_cache();
 
         // Build checkbox + link hit-rects for all loaded cards
@@ -2846,7 +2959,14 @@ impl Cards {
                     .iter()
                     .map(CardData::from_card)
                     .collect();
-                BoardData { name: name.clone(), cards }
+                let connections = self.board_connections
+                    .get(&idx)
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(ConnectionData::from_connection)
+                    .collect();
+                BoardData { name: name.clone(), cards, connections }
             })
             .collect();
 
@@ -2999,7 +3119,7 @@ impl Cards {
                 let board_name = self.boards.get(self.active_board_index)
                     .cloned()
                     .unwrap_or_else(|| "Board".to_string());
-                let board = BoardData { name: board_name, cards };
+                let board = BoardData { name: board_name, cards, connections: Vec::new() };
                 export_board(&board, &path, fmt)
             }
             _ => return,
@@ -3305,6 +3425,11 @@ impl Cards {
             self.dot_grid.selected_cards(),
             self.dot_grid.single_selected_card(),
             self.dot_grid.hovered_card(),
+        ).with_connections(
+            self.dot_grid.connections(),
+            self.dot_grid.pending_conn(),
+            self.dot_grid.pending_cursor(),
+            self.dot_grid.conn_anim_phase(),
         ).into();
 
         let mut shelf = CardShelf::new(
@@ -3339,6 +3464,50 @@ impl Cards {
 
         // Shelf pill always at the same overlay level — stable tree structure
         view = Overlay::new(view, shelf).into();
+
+        // Connection toolbar — shown when a connection is selected (click-to-select)
+        if let Some(conn) = self.selected_conn {
+            // Look up the latest state of the connection (style/arrows may have changed)
+            let live_conn = self.dot_grid.connections().iter().find(|c| {
+                c.from_card == conn.from_card && c.from_side == conn.from_side
+                && c.to_card == conn.to_card && c.to_side == conn.to_side
+            }).copied();
+            if let (Some(live), Some(toolbar_pos)) = (live_conn, self.dot_grid.conn_screen_midpoint(&conn)) {
+                use connection_toolbar::ConnectionToolbar;
+                let toolbar = ConnectionToolbar::new(
+                    toolbar_pos,
+                    self.window_size,
+                    live.line_style,
+                    live.arrow_from,
+                    live.arrow_to,
+                    self.theme.sidebar_background(),
+                    self.theme.button_border(),
+                    self.theme.button_shadow(),
+                    self.theme.icon_color(),
+                    self.theme.accent_bg_from(self.accent_color),
+                    self.accent_color,
+                    Color::from_rgb8(220, 60, 60),
+                    {
+                        let (fc, fs, tc, ts) = (live.from_card, live.from_side, live.to_card, live.to_side);
+                        move |style| Message::ConnSetLineStyle { from_card: fc, from_side: fs, to_card: tc, to_side: ts, style }
+                    },
+                    {
+                        let (fc, fs, tc, ts) = (live.from_card, live.from_side, live.to_card, live.to_side);
+                        move || Message::ConnToggleArrowFrom { from_card: fc, from_side: fs, to_card: tc, to_side: ts }
+                    },
+                    {
+                        let (fc, fs, tc, ts) = (live.from_card, live.from_side, live.to_card, live.to_side);
+                        move || Message::ConnToggleArrowTo { from_card: fc, from_side: fs, to_card: tc, to_side: ts }
+                    },
+                    {
+                        let (fc, fs, tc, ts) = (live.from_card, live.from_side, live.to_card, live.to_side);
+                        move || Message::ConnDelete { from_card: fc, from_side: fs, to_card: tc, to_side: ts }
+                    },
+                );
+                let toolbar_el: Element<Message> = toolbar.into();
+                view = Overlay::new(view, toolbar_el).into();
+            }
+        }
 
         // Custom text editor is now rendered directly in canvas, no overlay needed
 

@@ -1,7 +1,7 @@
 use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder, gradient};
 use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector};
 use std::cell::Cell;
-use crate::card::Card;
+use crate::card::{Card, CardSide, Connection};
 use std::collections::HashSet;
 
 
@@ -19,6 +19,8 @@ pub struct DotGridState {
     // Box selection
     box_select_start: Option<Point>,
     box_select_end: Option<Point>,
+    // Card connection drag
+    connecting_from: Option<(usize, CardSide)>,
 }
 
 impl Default for DotGridState {
@@ -36,6 +38,7 @@ impl Default for DotGridState {
             selecting_text_card: None,
             box_select_start: None,
             box_select_end: None,
+            connecting_from: None,
         }
     }
 }
@@ -73,6 +76,18 @@ pub struct DotGrid {
     single_selected_card: Option<usize>,
     /// Currently hovered card — updated via Cell since Program::update takes &self
     hovered_card: Cell<Option<usize>>,
+    /// Active connections between cards
+    connections: Vec<Connection>,
+    /// Card+side that a pending connection is being dragged from (Cell for Program::update &self)
+    pending_conn_from: Cell<Option<(usize, CardSide)>>,
+    /// Current cursor position while connecting (Cell for Program::update &self)
+    pending_conn_cursor: Cell<Point>,
+    /// Animation phase [0,1) for the dashed pending-connection line
+    conn_anim_phase: Cell<f32>,
+    /// Index of the currently hovered connection (for toolbar display)
+    hovered_conn: Cell<Option<usize>>,
+    /// Screen-space rect of the connection toolbar pill (set by view() each frame)
+    toolbar_region: Cell<Option<Rectangle>>,
 }
 
 impl DotGrid {
@@ -103,6 +118,12 @@ impl DotGrid {
             selected_cards: HashSet::new(),
             single_selected_card: None,
             hovered_card: Cell::new(None),
+            connections: Vec::new(),
+            pending_conn_from: Cell::new(None),
+            pending_conn_cursor: Cell::new(Point::ORIGIN),
+            conn_anim_phase: Cell::new(0.0),
+            hovered_conn: Cell::new(None),
+            toolbar_region: Cell::new(None),
         }
     }
 
@@ -368,6 +389,59 @@ impl DotGrid {
             self.cards.remove(pos);
             self.card_caches.remove(pos);
         }
+        self.connections.retain(|c| c.from_card != card_id && c.to_card != card_id);
+    }
+
+    pub fn connections(&self) -> &[Connection] { &self.connections }
+    pub fn connections_mut(&mut self) -> &mut Vec<Connection> { &mut self.connections }
+    pub fn add_connection(&mut self, conn: Connection) { self.connections.push(conn); }
+    pub fn set_connections(&mut self, conns: Vec<Connection>) { self.connections = conns; }
+    pub fn remove_connections_for_card(&mut self, card_id: usize) {
+        self.connections.retain(|c| c.from_card != card_id && c.to_card != card_id);
+    }
+    pub fn pending_conn(&self) -> Option<(usize, CardSide)> { self.pending_conn_from.get() }
+    pub fn pending_cursor(&self) -> Point { self.pending_conn_cursor.get() }
+    pub fn conn_anim_phase(&self) -> f32 { self.conn_anim_phase.get() }
+    pub fn advance_conn_anim(&self, dt: f32) {
+        let phase = (self.conn_anim_phase.get() + dt * 1.5) % 1.0;
+        self.conn_anim_phase.set(phase);
+    }
+    pub fn hovered_conn_idx(&self) -> Option<usize> { self.hovered_conn.get() }
+    pub fn set_toolbar_region(&self, rect: Option<Rectangle>) { self.toolbar_region.set(rect); }
+    /// Returns the screen-space midpoint of the hovered connection's bezier curve.
+    pub fn hovered_conn_toolbar_pos(&self) -> Option<Point> {
+        let idx  = self.hovered_conn.get()?;
+        let conn = self.connections.get(idx)?;
+        let from = self.cards.iter().find(|c| c.id == conn.from_card)?;
+        let to   = self.cards.iter().find(|c| c.id == conn.to_card)?;
+        let p0   = side_screen_pos(from, conn.from_side, self.offset);
+        let p3   = side_screen_pos(to,   conn.to_side,   self.offset);
+        let dist = ((p0.x - p3.x).powi(2) + (p0.y - p3.y).powi(2)).sqrt();
+        let ctrl = (dist * 0.45).max(70.0);
+        let (dx0, dy0) = conn.from_side.outward();
+        let (dx3, dy3) = conn.to_side.outward();
+        let p1 = Point::new(p0.x + dx0 * ctrl, p0.y + dy0 * ctrl);
+        let p2 = Point::new(p3.x + dx3 * ctrl, p3.y + dy3 * ctrl);
+        Some(cubic_bezier_pt(0.5, p0, p1, p2, p3))
+    }
+    /// Returns the hovered connection (by value) if any.
+    pub fn hovered_connection(&self) -> Option<crate::card::Connection> {
+        let idx = self.hovered_conn.get()?;
+        self.connections.get(idx).copied()
+    }
+    /// Returns the screen-space bezier midpoint for a given connection.
+    pub fn conn_screen_midpoint(&self, conn: &crate::card::Connection) -> Option<Point> {
+        let from = self.cards.iter().find(|c| c.id == conn.from_card)?;
+        let to   = self.cards.iter().find(|c| c.id == conn.to_card)?;
+        let p0   = side_screen_pos(from, conn.from_side, self.offset);
+        let p3   = side_screen_pos(to,   conn.to_side,   self.offset);
+        let dist = ((p0.x - p3.x).powi(2) + (p0.y - p3.y).powi(2)).sqrt();
+        let ctrl = (dist * 0.45).max(70.0);
+        let (dx0, dy0) = conn.from_side.outward();
+        let (dx3, dy3) = conn.to_side.outward();
+        let p1 = Point::new(p0.x + dx0 * ctrl, p0.y + dy0 * ctrl);
+        let p2 = Point::new(p3.x + dx3 * ctrl, p3.y + dy3 * ctrl);
+        Some(cubic_bezier_pt(0.5, p0, p1, p2, p3))
     }
 
     pub fn update_card_animation(&mut self, delta_time: f32) {
@@ -674,6 +748,48 @@ fn rounded_rectangle(rect: Rectangle, radius: f32) -> Path {
 }
 
 
+/// Returns the screen-space position of a card's side attachment point.
+fn side_screen_pos(card: &Card, side: CardSide, offset: Vector) -> Point {
+    let sx = card.current_position.x + offset.x;
+    let sy = card.current_position.y + offset.y;
+    match side {
+        CardSide::Top    => Point::new(sx + card.width / 2.0, sy),
+        CardSide::Bottom => Point::new(sx + card.width / 2.0, sy + card.height),
+        CardSide::Left   => Point::new(sx, sy + card.height / 2.0),
+        CardSide::Right  => Point::new(sx + card.width, sy + card.height / 2.0),
+    }
+}
+
+fn cubic_bezier_pt(t: f32, p0: Point, p1: Point, p2: Point, p3: Point) -> Point {
+    let u = 1.0 - t;
+    let u2 = u * u;
+    let t2 = t * t;
+    Point::new(
+        u * u2 * p0.x + 3.0 * u2 * t * p1.x + 3.0 * u * t2 * p2.x + t * t2 * p3.x,
+        u * u2 * p0.y + 3.0 * u2 * t * p1.y + 3.0 * u * t2 * p2.y + t * t2 * p3.y,
+    )
+}
+
+/// Returns true if `cursor` is within `threshold` pixels of the bezier connection curve.
+fn connection_hit(from: &Card, to: &Card, conn: &crate::card::Connection, offset: Vector, cursor: Point, threshold: f32) -> bool {
+    let p0 = side_screen_pos(from, conn.from_side, offset);
+    let p3 = side_screen_pos(to,   conn.to_side,   offset);
+    let dist = ((p0.x - p3.x).powi(2) + (p0.y - p3.y).powi(2)).sqrt();
+    let ctrl = (dist * 0.45).max(70.0);
+    let (dx0, dy0) = conn.from_side.outward();
+    let (dx3, dy3) = conn.to_side.outward();
+    let p1 = Point::new(p0.x + dx0 * ctrl, p0.y + dy0 * ctrl);
+    let p2 = Point::new(p3.x + dx3 * ctrl, p3.y + dy3 * ctrl);
+    let t_sq = threshold * threshold;
+    for i in 0..=24 {
+        let bp = cubic_bezier_pt(i as f32 / 24.0, p0, p1, p2, p3);
+        let dx = cursor.x - bp.x;
+        let dy = cursor.y - bp.y;
+        if dx * dx + dy * dy <= t_sq { return true; }
+    }
+    false
+}
+
 #[derive(Debug, Clone)]
 pub enum DotGridMessage {
     Pan(Vector),
@@ -692,6 +808,10 @@ pub enum DotGridMessage {
     CheckboxToggle(usize, usize), // (card_id, line_index)
     LinkClick(String),            // url to open
     BoxSelectEnd(Rectangle),      // box selection finished — rect in screen coords
+    ConnectionComplete { from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide },
+    ConnectionCancel,
+    DeleteConnection { from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide },
+    ConnectionClick { from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide },
 }
 
 impl Program<DotGridMessage> for &DotGrid {
@@ -714,6 +834,8 @@ impl Program<DotGridMessage> for &DotGrid {
             state.selecting_text_card = None;
             state.box_select_start = None;
             state.box_select_end = None;
+            state.connecting_from = None;
+            self.pending_conn_from.set(None);
             return (iced::widget::canvas::event::Status::Ignored, None);
         }
 
@@ -736,6 +858,25 @@ impl Program<DotGridMessage> for &DotGrid {
                     }
                     mouse::Event::ButtonPressed(mouse::Button::Left) => {
                         if let Some(pos) = current_pos {
+                            // Check connection-dot clicks first (before normal card handling)
+                            let conn_dot_r_sq = 12.0_f32 * 12.0;
+                            if let Some(hid) = self.hovered_card.get() {
+                                if let Some(card) = self.cards.iter().find(|c| c.id == hid) {
+                                    for &side in CardSide::all() {
+                                        let sp = side_screen_pos(card, side, self.offset);
+                                        let dx = pos.x - sp.x;
+                                        let dy = pos.y - sp.y;
+                                        if dx * dx + dy * dy <= conn_dot_r_sq {
+                                            state.connecting_from = Some((card.id, side));
+                                            self.pending_conn_from.set(Some((card.id, side)));
+                                            self.pending_conn_cursor.set(pos);
+                                            self.hovered_conn.set(None);
+                                            return (iced::widget::canvas::event::Status::Captured, None);
+                                        }
+                                    }
+                                }
+                            }
+
                             let mut is_editing_any = false;
 
                             // Iterate in reverse so clicks hit the top-most (highest z-order) card first
@@ -854,6 +995,25 @@ impl Program<DotGridMessage> for &DotGrid {
                                 }
                             }
 
+                            // Check if clicking on a connection line
+                            for conn in self.connections.iter() {
+                                let from = self.cards.iter().find(|c| c.id == conn.from_card);
+                                let to   = self.cards.iter().find(|c| c.id == conn.to_card);
+                                if let (Some(from), Some(to)) = (from, to) {
+                                    if connection_hit(from, to, conn, self.offset, pos, 8.0) {
+                                        return (
+                                            iced::widget::canvas::event::Status::Captured,
+                                            Some(DotGridMessage::ConnectionClick {
+                                                from_card: conn.from_card,
+                                                from_side: conn.from_side,
+                                                to_card:   conn.to_card,
+                                                to_side:   conn.to_side,
+                                            }),
+                                        );
+                                    }
+                                }
+                            }
+
                             // If editing and clicked outside all cards, stop editing
                             if is_editing_any {
                                 return (
@@ -868,6 +1028,34 @@ impl Program<DotGridMessage> for &DotGrid {
                         }
                     }
                     mouse::Event::ButtonReleased(mouse::Button::Left) => {
+                        // Finish connection drag if active
+                        if let Some((from_card, from_side)) = state.connecting_from.take() {
+                            self.pending_conn_from.set(None);
+                            let conn_dot_r_sq = 28.0_f32 * 28.0; // larger radius to match snap zone
+                            let msg = if let Some(pos) = current_pos {
+                                let mut found = None;
+                                'outer: for card in self.cards.iter() {
+                                    if card.id == from_card { continue; }
+                                    for &side in CardSide::all() {
+                                        let sp = side_screen_pos(card, side, self.offset);
+                                        let dx = pos.x - sp.x;
+                                        let dy = pos.y - sp.y;
+                                        if dx * dx + dy * dy <= conn_dot_r_sq {
+                                            found = Some(DotGridMessage::ConnectionComplete {
+                                                from_card, from_side,
+                                                to_card: card.id, to_side: side,
+                                            });
+                                            break 'outer;
+                                        }
+                                    }
+                                }
+                                found.unwrap_or(DotGridMessage::ConnectionCancel)
+                            } else {
+                                DotGridMessage::ConnectionCancel
+                            };
+                            return (iced::widget::canvas::event::Status::Captured, Some(msg));
+                        }
+
                         if let Some(card_id) = state.resizing_card {
                             state.resizing_card = None;
                             state.resize_start_size = None;
@@ -908,6 +1096,25 @@ impl Program<DotGridMessage> for &DotGrid {
                     }
                     mouse::Event::ButtonPressed(mouse::Button::Right) => {
                         if let Some(pos) = current_pos {
+                            // Check if right-clicking a connection line first
+                            for conn in self.connections.iter() {
+                                let from = self.cards.iter().find(|c| c.id == conn.from_card);
+                                let to   = self.cards.iter().find(|c| c.id == conn.to_card);
+                                if let (Some(from), Some(to)) = (from, to) {
+                                    if connection_hit(from, to, conn, self.offset, pos, 8.0) {
+                                        return (
+                                            iced::widget::canvas::event::Status::Captured,
+                                            Some(DotGridMessage::DeleteConnection {
+                                                from_card: conn.from_card,
+                                                from_side: conn.from_side,
+                                                to_card:   conn.to_card,
+                                                to_side:   conn.to_side,
+                                            }),
+                                        );
+                                    }
+                                }
+                            }
+
                             // Check if clicking on a card icon — iterate reverse for correct z-order
                             for card in self.cards.iter().rev() {
                                 let screen_bounds = Rectangle {
@@ -943,6 +1150,31 @@ impl Program<DotGridMessage> for &DotGrid {
                         }
                     }
                     mouse::Event::CursorMoved { .. } => {
+                        // Update pending connection cursor — snap to nearby side dots
+                        if let Some((from_id, _)) = state.connecting_from {
+                            if let Some(pos) = current_pos {
+                                let snap_r = 26.0_f32;
+                                let snap_r_sq = snap_r * snap_r;
+                                let mut best_pos = pos;
+                                let mut best_dist_sq = snap_r_sq;
+                                for card in self.cards.iter() {
+                                    if card.id == from_id { continue; }
+                                    for &side in CardSide::all() {
+                                        let sp = side_screen_pos(card, side, self.offset);
+                                        let dx = pos.x - sp.x;
+                                        let dy = pos.y - sp.y;
+                                        let d_sq = dx * dx + dy * dy;
+                                        if d_sq < best_dist_sq {
+                                            best_dist_sq = d_sq;
+                                            best_pos = sp;
+                                        }
+                                    }
+                                }
+                                self.pending_conn_cursor.set(best_pos);
+                            }
+                            // still fall through so hovered_card updates for connection target dots
+                        }
+
                         if state.is_panning {
                             if let (Some(current), Some(start)) = (current_pos, state.pan_start) {
                                 let delta = Vector::new(
@@ -1035,6 +1267,36 @@ impl Program<DotGridMessage> for &DotGrid {
             self.invalidate_card_cache(state.hovered_card.unwrap());
             self.hovered_card.set(None);
             state.hovered_card = None;
+        }
+
+        // Update hovered connection (only when not in a drag/connect mode)
+        if state.connecting_from.is_none() && !state.is_panning
+            && state.dragging_card.is_none() && state.resizing_card.is_none()
+        {
+            if let Some(pos) = current_pos {
+                // If cursor is inside the connection toolbar pill, keep hover stable
+                let in_toolbar = self.toolbar_region.get().map_or(false, |r| r.contains(pos));
+                if !in_toolbar {
+                    let mut new_hovered_conn = None;
+                    for (idx, conn) in self.connections.iter().enumerate() {
+                        let from = self.cards.iter().find(|c| c.id == conn.from_card);
+                        let to   = self.cards.iter().find(|c| c.id == conn.to_card);
+                        if let (Some(from), Some(to)) = (from, to) {
+                            if connection_hit(from, to, conn, self.offset, pos, 8.0) {
+                                new_hovered_conn = Some(idx);
+                                break;
+                            }
+                        }
+                    }
+                    if self.hovered_conn.get() != new_hovered_conn {
+                        self.hovered_conn.set(new_hovered_conn);
+                        self.clear_all_card_caches();
+                    }
+                }
+            } else if self.hovered_conn.get().is_some() {
+                self.hovered_conn.set(None);
+                self.clear_all_card_caches();
+            }
         }
 
         (iced::widget::canvas::event::Status::Ignored, None)

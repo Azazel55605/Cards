@@ -2,6 +2,71 @@ use iced::{Color, Point, Rectangle};
 use crate::custom_text_editor::CustomTextEditor;
 use crate::text_renderer::{CheckboxPosition, LinkPosition};
 
+/// Style of a connection line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineStyle { Solid, Dashed, Dotted }
+impl LineStyle {
+    pub fn as_str(self) -> &'static str {
+        match self { LineStyle::Solid => "Solid", LineStyle::Dashed => "Dashed", LineStyle::Dotted => "Dotted" }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s { "Dashed" => LineStyle::Dashed, "Dotted" => LineStyle::Dotted, _ => LineStyle::Solid }
+    }
+}
+
+/// Which side of a card a connection attaches to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardSide { Top, Bottom, Left, Right }
+
+impl CardSide {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CardSide::Top    => "Top",
+            CardSide::Bottom => "Bottom",
+            CardSide::Left   => "Left",
+            CardSide::Right  => "Right",
+        }
+    }
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "Bottom" => CardSide::Bottom,
+            "Left"   => CardSide::Left,
+            "Right"  => CardSide::Right,
+            _        => CardSide::Top,
+        }
+    }
+    pub fn all() -> &'static [CardSide] {
+        &[CardSide::Top, CardSide::Bottom, CardSide::Left, CardSide::Right]
+    }
+    /// Unit vector pointing outward from this side.
+    pub fn outward(self) -> (f32, f32) {
+        match self {
+            CardSide::Top    => (0.0, -1.0),
+            CardSide::Bottom => (0.0,  1.0),
+            CardSide::Left   => (-1.0, 0.0),
+            CardSide::Right  => (1.0,  0.0),
+        }
+    }
+}
+
+/// A directed connection between two card sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Connection {
+    pub from_card:  usize,
+    pub from_side:  CardSide,
+    pub to_card:    usize,
+    pub to_side:    CardSide,
+    pub line_style: LineStyle,
+    pub arrow_from: bool,   // arrowhead at from_card's attachment point
+    pub arrow_to:   bool,   // arrowhead at to_card's attachment point
+}
+
+impl Connection {
+    pub fn new(from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide) -> Self {
+        Self { from_card, from_side, to_card, to_side, line_style: LineStyle::Solid, arrow_from: false, arrow_to: false }
+    }
+}
+
 /// The display / editing mode of a card.
 /// Keep this as a flat enum so it's easy to add new types later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -617,6 +682,18 @@ impl Card {
             y: self.current_position.y + self.height - handle_size,
             width: handle_size,
             height: handle_size,
+        }
+    }
+
+    /// Returns the world-space center point on the given side of this card.
+    pub fn side_world_pos(&self, side: CardSide) -> Point {
+        let x = self.current_position.x;
+        let y = self.current_position.y;
+        match side {
+            CardSide::Top    => Point::new(x + self.width / 2.0, y),
+            CardSide::Bottom => Point::new(x + self.width / 2.0, y + self.height),
+            CardSide::Left   => Point::new(x, y + self.height / 2.0),
+            CardSide::Right  => Point::new(x + self.width, y + self.height / 2.0),
         }
     }
 
