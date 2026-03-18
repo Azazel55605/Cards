@@ -28,6 +28,7 @@ mod workspace_modal;
 mod file_picker;
 mod import_export;
 mod import_export_modal;
+mod zoom_bar;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -56,6 +57,7 @@ use import_export_modal::{ImportExportState, ImportExportMessage, IEKind, Import
 use card_toolbar::{CardToolbar, ToolbarItem};
 use card_layer::CardLayer;
 use card_shelf::{CardShelf, SHELF_HEIGHT, GHOST_CARD_W, GHOST_TOP_BAR_H};
+use zoom_bar::ZoomBar;
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -289,6 +291,11 @@ pub enum Message {
     OpenImagePicker(usize),
     ImagePickerMsg(FilePickerMessage),
     CloseImagePicker,
+    // Zoom
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    MenuViewResetZoom,
 }
 
 struct Cards {
@@ -380,6 +387,10 @@ struct Cards {
     icon_type_image: svg::Handle,
     // Image picker (card_id, picker state)
     image_picker: Option<(usize, FilePickerState)>,
+    /// Zoom level for the canvas (1.0 = 100%)
+    canvas_zoom: f32,
+    /// Whether the Ctrl key is currently held (for Ctrl+scroll zoom)
+    ctrl_held: bool,
     window_size: iced::Size,
     last_tick: Instant,
     // Workspace persistence
@@ -525,6 +536,8 @@ impl Cards {
             icon_fmt_bullet: svg::Handle::from_memory(include_bytes!("icons/fmt-bullet.svg")),
             icon_type_image: svg::Handle::from_memory(include_bytes!("icons/type-image.svg")),
             image_picker: None,
+            canvas_zoom: 1.0,
+            ctrl_held: false,
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
             workspace_path: None,
@@ -1330,6 +1343,9 @@ impl Cards {
             }
             Message::EventOccurred(event) => {
                 match event {
+                    Event::Keyboard(iced::keyboard::Event::ModifiersChanged(mods)) => {
+                        self.ctrl_held = mods.control();
+                    }
                     Event::Mouse(mouse::Event::CursorMoved { position }) => {
                         self.mouse_position = Some(position);
                     }
@@ -1372,18 +1388,43 @@ impl Cards {
                     }
                     Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                         if !self.settings_open {
-                            let scroll_delta = match delta {
-                                mouse::ScrollDelta::Lines { x, y } => {
-                                    Vector::new(x * 50.0, y * 50.0)
+                            if self.ctrl_held {
+                                // Ctrl+scroll → zoom toward cursor
+                                let scroll_y = match delta {
+                                    mouse::ScrollDelta::Lines  { y, .. } => y,
+                                    mouse::ScrollDelta::Pixels { y, .. } => y / 50.0,
+                                };
+                                let factor = if scroll_y > 0.0 { 1.1_f32.powf(scroll_y) } else { (1.0 / 1.1_f32).powf(-scroll_y) };
+                                let old_zoom = self.canvas_zoom;
+                                let new_zoom = (self.canvas_zoom * factor).clamp(0.05, 10.0);
+                                self.canvas_zoom = new_zoom;
+                                self.dot_grid.set_zoom(new_zoom);
+                                // Adjust offset so the point under the cursor stays fixed.
+                                // Formula: offset_new = offset_old + (cursor - center) * (1/new_z - 1/old_z)
+                                if let Some(cursor) = self.mouse_position {
+                                    let cx = self.window_size.width  / 2.0;
+                                    let cy = self.window_size.height / 2.0;
+                                    let dx = cursor.x - cx;
+                                    let dy = cursor.y - cy;
+                                    self.canvas_offset.x += dx * (1.0 / new_zoom - 1.0 / old_zoom);
+                                    self.canvas_offset.y += dy * (1.0 / new_zoom - 1.0 / old_zoom);
+                                    self.dot_grid.set_offset(self.canvas_offset);
                                 }
-                                mouse::ScrollDelta::Pixels { x, y } => {
-                                    Vector::new(x, y)
-                                }
-                            };
-                            self.canvas_offset.x += scroll_delta.x;
-                            self.canvas_offset.y += scroll_delta.y;
-                            self.dot_grid.set_offset(self.canvas_offset);
-                            self.canvas_position_dirty = true;
+                                self.canvas_position_dirty = true;
+                            } else {
+                                let scroll_delta = match delta {
+                                    mouse::ScrollDelta::Lines { x, y } => {
+                                        Vector::new(x * 50.0, y * 50.0)
+                                    }
+                                    mouse::ScrollDelta::Pixels { x, y } => {
+                                        Vector::new(x, y)
+                                    }
+                                };
+                                self.canvas_offset.x += scroll_delta.x;
+                                self.canvas_offset.y += scroll_delta.y;
+                                self.dot_grid.set_offset(self.canvas_offset);
+                                self.canvas_position_dirty = true;
+                            }
                         }
                     }
                     _ => {}
@@ -1568,6 +1609,26 @@ impl Cards {
                             self.dot_grid.set_offset(self.canvas_offset);
                             self.canvas_position_dirty = true;
                         }
+                        return Task::none();
+                    }
+
+                    // Ctrl+= / Ctrl++ → zoom in; Ctrl+- → zoom out; Ctrl+Shift+0 → reset zoom
+                    if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "=" || c.as_str() == "+") {
+                        self.canvas_zoom = (self.canvas_zoom * 1.25).clamp(0.05, 10.0);
+                        self.dot_grid.set_zoom(self.canvas_zoom);
+                        self.canvas_position_dirty = true;
+                        return Task::none();
+                    }
+                    if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "-") {
+                        self.canvas_zoom = (self.canvas_zoom / 1.25).clamp(0.05, 10.0);
+                        self.dot_grid.set_zoom(self.canvas_zoom);
+                        self.canvas_position_dirty = true;
+                        return Task::none();
+                    }
+                    if modifiers.control() && modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "0") {
+                        self.canvas_zoom = 1.0;
+                        self.dot_grid.set_zoom(self.canvas_zoom);
+                        self.canvas_position_dirty = true;
                         return Task::none();
                     }
 
@@ -2730,6 +2791,21 @@ impl Cards {
             Message::CloseImagePicker => {
                 self.image_picker = None;
             }
+            Message::ZoomIn => {
+                self.canvas_zoom = (self.canvas_zoom * 1.25).clamp(0.05, 10.0);
+                self.dot_grid.set_zoom(self.canvas_zoom);
+                self.canvas_position_dirty = true;
+            }
+            Message::ZoomOut => {
+                self.canvas_zoom = (self.canvas_zoom / 1.25).clamp(0.05, 10.0);
+                self.dot_grid.set_zoom(self.canvas_zoom);
+                self.canvas_position_dirty = true;
+            }
+            Message::ZoomReset | Message::MenuViewResetZoom => {
+                self.canvas_zoom = 1.0;
+                self.dot_grid.set_zoom(self.canvas_zoom);
+                self.canvas_position_dirty = true;
+            }
         }
 
         // Persist any state-changing action immediately
@@ -3568,7 +3644,7 @@ impl Cards {
             self.dot_grid.pending_conn(),
             self.dot_grid.pending_cursor(),
             self.dot_grid.conn_anim_phase(),
-        ).into();
+        ).with_zoom(self.canvas_zoom).into();
 
         let mut shelf = CardShelf::new(
             self.window_size.width,
@@ -3602,6 +3678,22 @@ impl Cards {
 
         // Shelf pill always at the same overlay level — stable tree structure
         view = Overlay::new(view, shelf).into();
+
+        // Zoom bar pill at the bottom-right corner
+        let zoom_bar: Element<Message> = ZoomBar::new(
+            self.window_size.width,
+            self.window_size.height,
+            self.canvas_zoom,
+            || Message::ZoomIn,
+            || Message::ZoomOut,
+            || Message::ZoomReset,
+            self.theme.sidebar_background(),
+            self.theme.button_border(),
+            self.theme.button_shadow(),
+            self.theme.button_text(),
+            self.theme.accent_bg_from(self.accent_color),
+        ).into();
+        view = Overlay::new(view, zoom_bar).into();
 
         // Connection toolbar — shown when a connection is selected (click-to-select)
         if let Some(conn) = self.selected_conn {
@@ -3691,11 +3783,18 @@ impl Cards {
                 let pill_w = CardToolbar::<Message>::measure_width(&items);
                 let pill_h = CardToolbar::<Message>::pill_height();
 
-                let card_screen_x = card.current_position.x + self.canvas_offset.x;
-                let card_screen_y = card.current_position.y + self.canvas_offset.y;
+                // Apply zoom transform: zoom-1 screen pos → actual screen pos
+                let z = self.canvas_zoom;
+                let vcx = self.window_size.width  / 2.0;
+                let vcy = self.window_size.height / 2.0;
+                let zoom1_x = card.current_position.x + self.canvas_offset.x;
+                let zoom1_y = card.current_position.y + self.canvas_offset.y;
+                let card_screen_x = vcx + (zoom1_x - vcx) * z;
+                let card_screen_y = vcy + (zoom1_y - vcy) * z;
+                let card_width_z  = card.width * z;
 
                 // Centre above card, clamped to window
-                let mut pill_x = card_screen_x + card.width / 2.0 - pill_w / 2.0;
+                let mut pill_x = card_screen_x + card_width_z / 2.0 - pill_w / 2.0;
                 let mut pill_y = card_screen_y - pill_h - 8.0;
                 pill_x = pill_x.max(8.0).min((self.window_size.width - pill_w - 8.0).max(8.0));
                 pill_y = pill_y.max(8.0);
@@ -4286,6 +4385,15 @@ impl Cards {
         .width(Length::Fill)
         .height(Length::Fill);
 
+        // Pill background is drawn by sidebar.rs; button style is transparent so it doesn't
+        // draw its own background (avoids double background with wrong radius/shadow).
+        let floating_transparent_style = CardButtonStyle {
+            background:          Color::TRANSPARENT,
+            background_hovered:  self.theme.accent_bg_from(self.accent_color),
+            text_color:          self.theme.button_text(),
+            border_color:        Color::TRANSPARENT,
+            shadow_color:        Color::TRANSPARENT,
+        };
         let floating_button = button(
             container(
                 svg(self.icon_menu_right.clone())
@@ -4300,7 +4408,7 @@ impl Cards {
         )
         .height(40)
         .width(40)
-        .class(floating_btn_style)
+        .class(floating_transparent_style)
         .on_press(Message::ToggleSidebar);
 
         let sidebar: Element<Message> = Sidebar::new(
@@ -4311,6 +4419,7 @@ impl Cards {
             sidebar_shadow,
             self.sidebar_offset,
         )
+        .pill_border(self.theme.button_border())
         .floating_button(floating_button)
         .into();
 
@@ -4351,6 +4460,7 @@ impl Cards {
                 AppMenuItem::Separator,
                 AppMenuItem::Label("VIEW".to_string()),
                 AppMenuItem::Button { label: "Reset Canvas".to_string(),     message: Message::MenuViewResetCanvas },
+                AppMenuItem::Button { label: "Reset Zoom".to_string(),       message: Message::MenuViewResetZoom },
                 AppMenuItem::Button { label: "Toggle Sidebar".to_string(),   message: Message::MenuViewToggleSidebar },
                 AppMenuItem::Button { label: toggle_theme_label.to_string(), message: Message::MenuViewToggleTheme },
                 AppMenuItem::Separator,
@@ -5745,6 +5855,14 @@ impl Cards {
                     ("Middle Mouse",          "Pan canvas"),
                     ("Scroll",                "Pan canvas vertically / horizontally"),
                     ("Click + Drag",          "Pan canvas (on empty space)"),
+                    ("SEP", ""),
+                    // Zoom
+                    ("SECTION", "Zoom"),
+                    ("Ctrl + Scroll",         "Zoom in / out toward cursor"),
+                    ("Ctrl + =  /  Ctrl + +", "Zoom in"),
+                    ("Ctrl + \u{2212}",       "Zoom out"),
+                    ("Ctrl + Shift + 0",      "Reset zoom to 100%"),
+                    ("\u{2212}  /  %  /  +",  "Zoom bar: zoom out / reset / zoom in"),
                     ("SEP", ""),
                     // Boards
                     ("SECTION", "Boards"),

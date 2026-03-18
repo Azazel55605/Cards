@@ -88,6 +88,10 @@ pub struct DotGrid {
     hovered_conn: Cell<Option<usize>>,
     /// Screen-space rect of the connection toolbar pill (set by view() each frame)
     toolbar_region: Cell<Option<Rectangle>>,
+    /// Zoom level (1.0 = 100%, zoomed around viewport center)
+    zoom: f32,
+    /// Viewport center in canvas-local coords (updated each frame for conn_screen_midpoint)
+    viewport_center: Cell<Point>,
 }
 
 impl DotGrid {
@@ -124,6 +128,8 @@ impl DotGrid {
             conn_anim_phase: Cell::new(0.0),
             hovered_conn: Cell::new(None),
             toolbar_region: Cell::new(None),
+            zoom: 1.0,
+            viewport_center: Cell::new(Point::ORIGIN),
         }
     }
 
@@ -163,6 +169,17 @@ impl DotGrid {
         self.offset = offset;
         self.static_cache.clear();
         self.clear_all_card_caches();
+    }
+
+    pub fn zoom(&self) -> f32 { self.zoom }
+
+    pub fn set_zoom(&mut self, zoom: f32) {
+        let clamped = zoom.clamp(0.05, 10.0);
+        if (clamped - self.zoom).abs() > 1e-6 {
+            self.zoom = clamped;
+            self.static_cache.clear();
+            self.clear_all_card_caches();
+        }
     }
 
     pub fn set_exclude_region(&mut self, region: Option<Rectangle>) {
@@ -422,14 +439,15 @@ impl DotGrid {
         let (dx3, dy3) = conn.to_side.outward();
         let p1 = Point::new(p0.x + dx0 * ctrl, p0.y + dy0 * ctrl);
         let p2 = Point::new(p3.x + dx3 * ctrl, p3.y + dy3 * ctrl);
-        Some(cubic_bezier_pt(0.5, p0, p1, p2, p3))
+        let mid = cubic_bezier_pt(0.5, p0, p1, p2, p3);
+        Some(self.apply_zoom_to_point(mid))
     }
     /// Returns the hovered connection (by value) if any.
     pub fn hovered_connection(&self) -> Option<crate::card::Connection> {
         let idx = self.hovered_conn.get()?;
         self.connections.get(idx).copied()
     }
-    /// Returns the screen-space bezier midpoint for a given connection.
+    /// Returns the screen-space bezier midpoint for a given connection (zoom-adjusted).
     pub fn conn_screen_midpoint(&self, conn: &crate::card::Connection) -> Option<Point> {
         let from = self.cards.iter().find(|c| c.id == conn.from_card)?;
         let to   = self.cards.iter().find(|c| c.id == conn.to_card)?;
@@ -441,7 +459,21 @@ impl DotGrid {
         let (dx3, dy3) = conn.to_side.outward();
         let p1 = Point::new(p0.x + dx0 * ctrl, p0.y + dy0 * ctrl);
         let p2 = Point::new(p3.x + dx3 * ctrl, p3.y + dy3 * ctrl);
-        Some(cubic_bezier_pt(0.5, p0, p1, p2, p3))
+        let mid = cubic_bezier_pt(0.5, p0, p1, p2, p3);
+        Some(self.apply_zoom_to_point(mid))
+    }
+
+    /// Convert a "zoom-1 screen pos" (world + offset) to actual screen pos accounting for zoom.
+    fn apply_zoom_to_point(&self, p: Point) -> Point {
+        let vc = self.viewport_center.get();
+        Point::new(vc.x + (p.x - vc.x) * self.zoom, vc.y + (p.y - vc.y) * self.zoom)
+    }
+
+    /// Inverse-transform a cursor position from actual screen space to zoom-1 canvas space.
+    pub fn inverse_zoom_point(&self, p: Point) -> Point {
+        if self.zoom == 1.0 { return p; }
+        let vc = self.viewport_center.get();
+        Point::new(vc.x + (p.x - vc.x) / self.zoom, vc.y + (p.y - vc.y) / self.zoom)
     }
 
     pub fn update_card_animation(&mut self, delta_time: f32) {
@@ -668,17 +700,25 @@ impl DotGrid {
             self.background_color,
         );
 
-        // Calculate the visible grid range based on offset
-        let offset_x = self.offset.x % self.dot_spacing;
-        let offset_y = self.offset.y % self.dot_spacing;
+        let z  = self.zoom;
+        let vs = self.dot_spacing * z; // visual spacing between dots in screen pixels
+        let cx = bounds.width  / 2.0;
+        let cy = bounds.height / 2.0;
 
-        let cols = (bounds.width / self.dot_spacing) as i32 + 2;
-        let rows = (bounds.height / self.dot_spacing) as i32 + 2;
+        // Phase of the first dot column/row in screen space, derived from the zoom formula.
+        // screen_pos = cx + (unscaled_pos - cx) * z, where unscaled_pos = k*dot_spacing + offset
+        // → screen_pos = cx*(1-z) + (k*dot_spacing + offset)*z = cx*(1-z) + k*vs + offset*z
+        // phase = (cx*(1-z) + offset*z) mod vs
+        let fox = (cx * (1.0 - z) + self.offset.x * z).rem_euclid(vs);
+        let foy = (cy * (1.0 - z) + self.offset.y * z).rem_euclid(vs);
+
+        let cols = (bounds.width  / vs) as i32 + 2;
+        let rows = (bounds.height / vs) as i32 + 2;
 
         for row in 0..rows {
             for col in 0..cols {
-                let x = col as f32 * self.dot_spacing + offset_x;
-                let y = row as f32 * self.dot_spacing + offset_y;
+                let x = col as f32 * vs + fox;
+                let y = row as f32 * vs + foy;
 
                 // Skip dots in the exclude region
                 if !self.is_in_exclude_region(x, y) {
@@ -839,7 +879,16 @@ impl Program<DotGridMessage> for &DotGrid {
             return (iced::widget::canvas::event::Status::Ignored, None);
         }
 
-        let current_pos = cursor.position_in(bounds);
+        // Store viewport center for conn_screen_midpoint zoom transform.
+        let vc = Point::new(bounds.width / 2.0, bounds.height / 2.0);
+        self.viewport_center.set(vc);
+
+        // Inverse-transform cursor from actual screen space to zoom-1 canvas space so
+        // all existing hit-test logic (card rects, connections, etc.) works unchanged.
+        let current_pos = cursor.position_in(bounds).map(|pos| {
+            if self.zoom == 1.0 { return pos; }
+            Point::new(vc.x + (pos.x - vc.x) / self.zoom, vc.y + (pos.y - vc.y) / self.zoom)
+        });
 
         match event {
             iced::widget::canvas::Event::Mouse(mouse_event) => {
@@ -1366,17 +1415,21 @@ impl Program<DotGridMessage> for &DotGrid {
         // Draw dynamic overlay (lines + displaced dots)
         let mut dynamic_frame = Frame::new(renderer, bounds.size());
 
-        // Calculate grid position accounting for offset
-        let offset_x = self.offset.x % self.dot_spacing;
-        let offset_y = self.offset.y % self.dot_spacing;
+        // Zoom-aware dot grid positions (screen space)
+        let z  = self.zoom;
+        let vs = self.dot_spacing * z;
+        let cx = bounds.width  / 2.0;
+        let cy = bounds.height / 2.0;
+        let fox = (cx * (1.0 - z) + self.offset.x * z).rem_euclid(vs);
+        let foy = (cy * (1.0 - z) + self.offset.y * z).rem_euclid(vs);
 
-        let cols = (bounds.width / self.dot_spacing) as i32 + 2;
-        let rows = (bounds.height / self.dot_spacing) as i32 + 2;
+        let cols = (bounds.width  / vs) as i32 + 2;
+        let rows = (bounds.height / vs) as i32 + 2;
 
-        // Calculate affected range
-        let affect_range = (self.influence_radius.max(self.line_radius) / self.dot_spacing).ceil() as i32 + 1;
-        let mouse_col = ((mouse_pos.x - offset_x) / self.dot_spacing).round() as i32;
-        let mouse_row = ((mouse_pos.y - offset_y) / self.dot_spacing).round() as i32;
+        // Calculate affected range (influence radius is in screen pixels, dots also in screen pixels)
+        let affect_range = (self.influence_radius.max(self.line_radius) / vs).ceil() as i32 + 1;
+        let mouse_col = ((mouse_pos.x - fox) / vs).round() as i32;
+        let mouse_row = ((mouse_pos.y - foy) / vs).round() as i32;
 
         let min_col = (mouse_col - affect_range).max(0);
         let max_col = (mouse_col + affect_range).min(cols - 1);
@@ -1399,8 +1452,8 @@ impl Program<DotGridMessage> for &DotGrid {
         // Calculate affected dot positions
         for row in min_row..=max_row {
             for col in min_col..=max_col {
-                let base_x = col as f32 * self.dot_spacing + offset_x;
-                let base_y = row as f32 * self.dot_spacing + offset_y;
+                let base_x = col as f32 * vs + fox;
+                let base_y = row as f32 * vs + foy;
                 let base_pos = Point::new(base_x, base_y);
 
                 // Check if in exclude region
@@ -1507,7 +1560,12 @@ impl Program<DotGridMessage> for &DotGrid {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if let Some(pos) = cursor.position_in(bounds) {
+        if let Some(raw_pos) = cursor.position_in(bounds) {
+        let vc = Point::new(bounds.width / 2.0, bounds.height / 2.0);
+        let pos = if self.zoom == 1.0 { raw_pos } else {
+            Point::new(vc.x + (raw_pos.x - vc.x) / self.zoom, vc.y + (raw_pos.y - vc.y) / self.zoom)
+        };
+        {
             // Check if hovering over resize handle
             for card in &self.cards {
                 let screen_bounds = Rectangle {
@@ -1608,7 +1666,8 @@ impl Program<DotGridMessage> for &DotGrid {
             if state.resizing_card.is_some() {
                 return mouse::Interaction::ResizingDiagonallyDown;
             }
-        }
+        } // end inner zoom block
+        } // end if let Some(raw_pos)
 
         mouse::Interaction::default()
     }

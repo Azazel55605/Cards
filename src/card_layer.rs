@@ -35,6 +35,8 @@ pub struct CardLayer<'a> {
     pending_conn:         Option<(usize, CardSide)>,
     pending_cursor:       Point,
     conn_anim_phase:      f32,
+    // Zoom
+    zoom:                 f32,
 }
 
 impl<'a> CardLayer<'a> {
@@ -68,7 +70,13 @@ impl<'a> CardLayer<'a> {
             pending_conn: None,
             pending_cursor: Point::ORIGIN,
             conn_anim_phase: 0.0,
+            zoom: 1.0,
         }
+    }
+
+    pub fn with_zoom(mut self, zoom: f32) -> Self {
+        self.zoom = zoom;
+        self
     }
 
     /// Attach connection rendering data.
@@ -281,18 +289,50 @@ impl<'a, Message> Widget<Message, iced::Theme, iced::Renderer> for CardLayer<'a>
         use iced::advanced::graphics::geometry::Renderer as GeoRenderer;
 
         let bounds = layout.bounds();
+        let z  = self.zoom;
+        // Viewport center in canvas-local coords (frame coords start at bounds origin)
+        let cx = bounds.width  / 2.0;
+        let cy = bounds.height / 2.0;
+
+        // Helper: apply frame zoom transform around viewport center.
+        // frame coordinates are 0-based (bounds.size()), so center = (cx, cy).
+        let apply_zoom = |frame: &mut Frame| {
+            if z != 1.0 {
+                frame.translate(Vector::new(cx, cy));
+                frame.scale(z);
+                frame.translate(Vector::new(-cx, -cy));
+            }
+        };
+
+        // Helper: convert a zoom-1 canvas local rect to a zoomed absolute screen rect
+        // (for renderer calls that use absolute coordinates).
+        let zoomed_abs_rect = |local_x: f32, local_y: f32, w: f32, h: f32| -> Rectangle {
+            let ax = bounds.x + local_x;
+            let ay = bounds.y + local_y;
+            let acx = bounds.x + cx;
+            let acy = bounds.y + cy;
+            Rectangle {
+                x:      acx + (ax - acx) * z,
+                y:      acy + (ay - acy) * z,
+                width:  w * z,
+                height: h * z,
+            }
+        };
 
         // ── connection lines (behind cards) ────────────────────────────────
         if !self.connections.is_empty() {
             renderer.with_layer(bounds, |renderer| {
                 let mut frame = Frame::new(&*renderer, bounds.size());
-                for conn in self.connections {
-                    let from = self.cards.iter().find(|c| c.id == conn.from_card);
-                    let to   = self.cards.iter().find(|c| c.id == conn.to_card);
-                    if let (Some(from), Some(to)) = (from, to) {
-                        draw_connection(&mut frame, from, to, conn, self.offset);
+                frame.with_save(|frame| {
+                    apply_zoom(frame);
+                    for conn in self.connections {
+                        let from = self.cards.iter().find(|c| c.id == conn.from_card);
+                        let to   = self.cards.iter().find(|c| c.id == conn.to_card);
+                        if let (Some(from), Some(to)) = (from, to) {
+                            draw_connection(frame, from, to, conn, self.offset);
+                        }
                     }
-                }
+                });
                 GeoRenderer::draw_geometry(renderer, frame.into_geometry());
             });
         }
@@ -301,20 +341,24 @@ impl<'a, Message> Widget<Message, iced::Theme, iced::Renderer> for CardLayer<'a>
         for card in self.cards.iter() {
             renderer.with_layer(bounds, |renderer| {
                 let mut frame = Frame::new(&*renderer, bounds.size());
-                self.draw_card(&mut frame, card);
+                frame.with_save(|frame| {
+                    apply_zoom(frame);
+                    self.draw_card(frame, card);
+                });
                 GeoRenderer::draw_geometry(renderer, frame.into_geometry());
 
-                // Draw image content for Image cards (must be after geometry flush)
+                // Draw image content for Image cards (must be after geometry flush).
+                // Image renderer uses absolute screen coordinates, so apply zoom manually.
                 if card.card_type == CardType::Image {
                     let screen_x = card.current_position.x + self.offset.x;
                     let screen_y = card.current_position.y + self.offset.y;
                     let pad = 6.0_f32;
-                    let content_rect = Rectangle {
-                        x:      bounds.x + screen_x + pad,
-                        y:      bounds.y + screen_y + 30.0 + pad,
-                        width:  card.width  - pad * 2.0,
-                        height: card.height - 30.0 - pad * 2.0,
-                    };
+                    let content_rect = zoomed_abs_rect(
+                        screen_x + pad,
+                        screen_y + 30.0 + pad,
+                        card.width  - pad * 2.0,
+                        card.height - 30.0 - pad * 2.0,
+                    );
                     match &card.image_handle {
                         Some(crate::card::CardImageHandle::Raster(handle)) => {
                             use iced::advanced::image::{Renderer as ImgRenderer, Image};
@@ -352,25 +396,27 @@ impl<'a, Message> Widget<Message, iced::Theme, iced::Renderer> for CardLayer<'a>
         if needs_overlay {
             renderer.with_layer(bounds, |renderer| {
                 let mut frame = Frame::new(&*renderer, bounds.size());
+                frame.with_save(|frame| {
+                    apply_zoom(frame);
 
-                // Side connection dots
-                for card in self.cards.iter() {
-                    if show_dots_on(card.id) {
-                        draw_side_dots(&mut frame, card, self.offset, card.color, self.accent_color);
+                    // Side connection dots
+                    for card in self.cards.iter() {
+                        if show_dots_on(card.id) {
+                            draw_side_dots(frame, card, self.offset, card.color, self.accent_color);
+                        }
                     }
-                }
 
-                // Pending animated connection line
-                if let Some((from_id, from_side)) = self.pending_conn {
-                    if let Some(card) = self.cards.iter().find(|c| c.id == from_id) {
-                        draw_pending_line(
-                            &mut frame, card, from_side,
-                            self.pending_cursor, self.offset,
-                            card.color, self.conn_anim_phase,
-                        );
+                    // Pending animated connection line
+                    if let Some((from_id, from_side)) = self.pending_conn {
+                        if let Some(card) = self.cards.iter().find(|c| c.id == from_id) {
+                            draw_pending_line(
+                                frame, card, from_side,
+                                self.pending_cursor, self.offset,
+                                card.color, self.conn_anim_phase,
+                            );
+                        }
                     }
-                }
-
+                });
                 GeoRenderer::draw_geometry(renderer, frame.into_geometry());
             });
         }

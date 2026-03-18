@@ -1,5 +1,5 @@
 use iced::advanced::layout::{self, Layout};
-use iced::advanced::renderer;
+use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::gradient;
@@ -17,6 +17,8 @@ where
     accent: Color,
     shadow: Color,
     offset: f32,
+    /// Border color for the floating button pill (optional — defaults to transparent)
+    pill_border: Color,
 }
 
 impl<'a, Message, Renderer> Sidebar<'a, Message, Renderer>
@@ -39,7 +41,13 @@ where
             accent,
             shadow,
             offset,
+            pill_border: Color::TRANSPARENT,
         }
+    }
+
+    pub fn pill_border(mut self, color: Color) -> Self {
+        self.pill_border = color;
+        self
     }
 
     // ...existing code...
@@ -195,11 +203,11 @@ where
             children.next();
         }
 
-        // Draw floating button when sidebar is hidden
+        // Draw floating button (pill) when sidebar is hidden
         if self.floating_button.is_some() && sidebar_x + self.width < 0.0 {
             if let Some(button_layout) = children.next() {
-                let button_x = 25.0;
-                let button_y = full_bounds.height - 40.0 - 25.0;
+                let button_x = 15.0;
+                let button_y = full_bounds.height - 40.0 - 14.0;
 
                 let button_bounds = Rectangle {
                     x: button_x,
@@ -208,34 +216,54 @@ where
                     height: 40.0,
                 };
 
-                // Translate cursor for button
-                let translated_cursor = if let Some(pos) = cursor.position() {
-                    if button_bounds.contains(pos) {
-                        mouse::Cursor::Available(Point::new(
-                            pos.x - button_x,
-                            pos.y - button_y,
-                        ))
+                // Draw pill background behind the button (matches card shelf / zoom bar style)
+                renderer.with_layer(full_bounds, |renderer| {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: button_bounds,
+                            border: Border {
+                                color: self.pill_border,
+                                width: 1.0,
+                                radius: 10.0.into(),
+                            },
+                            shadow: Shadow {
+                                color: self.shadow,
+                                offset: Vector::new(0.0, 4.0),
+                                blur_radius: 12.0,
+                            },
+                        },
+                        self.background,
+                    );
+
+                    // Draw button content on top of pill
+                    let translated_cursor = if let Some(pos) = cursor.position() {
+                        if button_bounds.contains(pos) {
+                            mouse::Cursor::Available(Point::new(
+                                pos.x - button_x,
+                                pos.y - button_y,
+                            ))
+                        } else {
+                            cursor
+                        }
                     } else {
                         cursor
-                    }
-                } else {
-                    cursor
-                };
+                    };
 
-                renderer.with_translation(
-                    Vector::new(button_x, button_y),
-                    |renderer| {
-                        self.floating_button.as_ref().unwrap().as_widget().draw(
-                            &tree.children[1],
-                            renderer,
-                            theme,
-                            style,
-                            button_layout,
-                            translated_cursor,
-                            viewport,
-                        );
-                    },
-                );
+                    renderer.with_translation(
+                        Vector::new(button_x, button_y),
+                        |renderer| {
+                            self.floating_button.as_ref().unwrap().as_widget().draw(
+                                &tree.children[1],
+                                renderer,
+                                theme,
+                                style,
+                                button_layout,
+                                translated_cursor,
+                                viewport,
+                            );
+                        },
+                    );
+                });
             }
         }
     }
