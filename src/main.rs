@@ -147,7 +147,7 @@ impl text_editor::Catalog for TransparentTextEditorStyle {
 }
 
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.1.9";
+const APP_VERSION: &str = "0.2.0";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
