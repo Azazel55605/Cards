@@ -15,6 +15,7 @@ mod markdown;
 mod custom_text_editor;
 mod card_toolbar;
 mod card_layer;
+mod card_shelf;
 mod icon_util;
 mod positioned;
 mod text_document;
@@ -53,6 +54,7 @@ use file_picker::{FilePickerState, FilePickerMessage, FilePickerMode};
 use import_export_modal::{ImportExportState, ImportExportMessage, IEKind, ImportExportResult};
 use card_toolbar::{CardToolbar, ToolbarItem};
 use card_layer::CardLayer;
+use card_shelf::{CardShelf, SHELF_HEIGHT, GHOST_CARD_W, GHOST_TOP_BAR_H};
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -276,6 +278,7 @@ pub enum Message {
     MenuImportWorkspace,
     MenuImportBoard,
     ImportExport(ImportExportMessage),
+    ShelfDragStart(CardType, Point),
 }
 
 struct Cards {
@@ -380,6 +383,8 @@ struct Cards {
     // Import / Export modal
     import_export_modal: Option<ImportExportState>,
     import_export_submenu_open: bool,
+    // Shelf drag state
+    shelf_drag: Option<CardType>,
 }
 
 const SIDEBAR_HIDDEN_OFFSET: f32 = -280.0;
@@ -508,6 +513,7 @@ impl Cards {
             time_since_last_save: 0.0,
             import_export_modal: None,
             import_export_submenu_open: false,
+            shelf_drag: None,
         };
         cards.update_exclude_region();
 
@@ -613,7 +619,7 @@ impl Cards {
                 } else {
                     // Instant toggle
                     self.settings_open = !self.settings_open;
-                    self.dot_grid.set_effect_enabled(!self.settings_open);
+                    self.dot_grid.set_effect_enabled(!self.settings_open && self.config.general.enable_animations);
                     self.update_exclude_region();
                 }
                 self.context_menu_position = None;
@@ -628,7 +634,7 @@ impl Cards {
                 } else {
                     // Instant close
                     self.settings_open = false;
-                    self.dot_grid.set_effect_enabled(true);
+                    self.dot_grid.set_effect_enabled(self.config.general.enable_animations);
                     self.update_exclude_region();
                 }
             }
@@ -644,6 +650,7 @@ impl Cards {
                 if let Err(e) = self.config.set_animations_enabled(enabled) {
                     eprintln!("Failed to save animations setting: {}", e);
                 }
+                self.dot_grid.set_effect_enabled(enabled && !self.settings_open);
             }
             Message::SetFontFamily(family) => {
                 if self.config.general.debug_mode {
@@ -808,7 +815,7 @@ impl Cards {
                         if !self.settings_opening {
                             // Animation complete for closing
                             self.settings_open = false;
-                            self.dot_grid.set_effect_enabled(true);
+                            self.dot_grid.set_effect_enabled(self.config.general.enable_animations);
                             self.update_exclude_region();
                         }
                     }
@@ -1244,6 +1251,26 @@ impl Cards {
                             }
                             self.editing_board_index = None;
                             self.board_rename_value.clear();
+                        }
+                    }
+                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                        if let Some(card_type) = self.shelf_drag.take() {
+                            if let Some(pos) = self.mouse_position {
+                                let shelf_top = self.window_size.height - SHELF_HEIGHT;
+                                if pos.y < shelf_top {
+                                    // Drop position: ghost top-left anchored to cursor in top bar
+                                    let screen_pos = Point::new(
+                                        pos.x - GHOST_CARD_W / 2.0,
+                                        pos.y - GHOST_TOP_BAR_H / 2.0,
+                                    );
+                                    let card_id = self.dot_grid.add_card(screen_pos, self.accent_color);
+                                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                        card.card_type = card_type;
+                                    }
+                                    self.dot_grid.clear_cards_cache();
+                                    self.workspace_dirty = true;
+                                }
+                            }
                         }
                     }
                     Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -2460,6 +2487,9 @@ impl Cards {
                 self.import_export_modal = Some(ImportExportState::new_import_board(dir));
             }
 
+            Message::ShelfDragStart(card_type, _pos) => {
+                self.shelf_drag = Some(card_type);
+            }
             Message::ImportExport(ie_msg) => {
                 self.handle_import_export_message(ie_msg);
             }
@@ -3230,6 +3260,9 @@ impl Cards {
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                     Some(Message::EventOccurred(event))
                 }
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                    Some(Message::EventOccurred(event))
+                }
                 Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Message::EventOccurred(event)),
                 Event::Mouse(mouse::Event::WheelScrolled { .. }) => Some(Message::EventOccurred(event)),
                 Event::Window(iced::window::Event::Resized(_)) => Some(Message::EventOccurred(event)),
@@ -3274,10 +3307,38 @@ impl Cards {
             self.dot_grid.hovered_card(),
         ).into();
 
+        let mut shelf = CardShelf::new(
+            self.window_size.width,
+            self.window_size.height,
+            |card_type, pos| Message::ShelfDragStart(card_type, pos),
+            self.theme.sidebar_background(),
+            self.theme.button_border(),
+            self.theme.button_shadow(),
+            self.theme.icon_color(),
+            self.theme.accent_bg_from(self.accent_color),
+        );
+        // Attach ghost card data when a drag is active above the shelf zone
+        if let Some(card_type) = self.shelf_drag {
+            if let Some(pos) = self.mouse_position {
+                if pos.y < self.window_size.height - SHELF_HEIGHT {
+                    shelf = shelf.with_ghost(
+                        card_type, pos,
+                        self.dot_grid.card_background(),
+                        self.dot_grid.card_border(),
+                        self.accent_color,
+                    );
+                }
+            }
+        }
+        let shelf: Element<Message> = shelf.into();
+
         let main_content: Element<Message> = iced::widget::stack![canvas, card_layer].into();
 
         // Build the base view with main content
         let mut view: Element<Message> = main_content;
+
+        // Shelf pill always at the same overlay level — stable tree structure
+        view = Overlay::new(view, shelf).into();
 
         // Custom text editor is now rendered directly in canvas, no overlay needed
 
