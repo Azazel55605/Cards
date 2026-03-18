@@ -14,6 +14,7 @@ mod app_menu;
 mod markdown;
 mod custom_text_editor;
 mod card_toolbar;
+mod card_layer;
 mod icon_util;
 mod positioned;
 mod text_document;
@@ -46,12 +47,12 @@ use config::{Config, FontFamily, AccentColor};
 use context_menu::ContextMenu;
 use app_menu::{AppMenu, AppMenuItem};
 use card::{Card, CardIcon, CardType};
-use positioned::Positioned;
 use workspace::{WorkspaceFile, BoardData, CardData};
 use workspace_modal::{WorkspaceModalState, WorkspaceModalMessage};
 use file_picker::{FilePickerState, FilePickerMessage, FilePickerMode};
 use import_export_modal::{ImportExportState, ImportExportMessage, IEKind, ImportExportResult};
 use card_toolbar::{CardToolbar, ToolbarItem};
+use card_layer::CardLayer;
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -313,6 +314,10 @@ struct Cards {
     // Card editing state
     editing_card_id: Option<usize>,
     selected_card_id: Option<usize>,  // Track selected card for toolbar
+    // Multi-card box-selection
+    selected_card_ids: std::collections::HashSet<usize>,
+    /// Previous world position of the batch-dragged card (for delta computation)
+    last_drag_world_pos: Option<Point>,
     // Board management
     boards: Vec<String>,  // List of board names
     active_board_index: usize,  // Currently active board
@@ -449,6 +454,8 @@ impl Cards {
             card_type_menu_card_id: None,
             editing_card_id: None,
             selected_card_id: None,
+            selected_card_ids: std::collections::HashSet::new(),
+            last_drag_world_pos: None,
             boards: vec!["Board 1".to_string()],
             active_board_index: 0,
             hovered_board_index: None,
@@ -919,13 +926,32 @@ impl Cards {
                         }
                     }
                     DotGridMessage::CardLeftClickBar(card_id, _pos) => {
-                        // Start dragging - keep card selected but stop editing
+                        // Start dragging — stop editing but keep (or set) selection
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             card.is_dragging = true;
-                            card.is_editing = false; // Stop editing when dragging
+                            card.is_editing = false;
                         }
                         self.editing_card_id = None;
-                        // Keep selected_card_id so toolbar stays visible during drag
+                        self.last_drag_world_pos = None;
+                        // Bring card to front so it renders on top while dragging
+                        self.dot_grid.bring_card_to_front(card_id);
+                        // If card is not part of multi-selection, clear multi-select.
+                        // Do NOT change single-card selection here — selection is
+                        // set/confirmed on release (CardDrop).  Keeping the existing
+                        // selection state means the view doesn't restructure on press,
+                        // so the drag gesture registers immediately without a second click.
+                        if !self.selected_card_ids.contains(&card_id) {
+                            self.selected_card_ids.clear();
+                            self.dot_grid.clear_selected_cards();
+                            // leave selected_card_id / single_selected_card unchanged
+                        } else {
+                            // Mark all selected cards as dragging too
+                            for card in self.dot_grid.cards_mut().iter_mut() {
+                                if self.selected_card_ids.contains(&card.id) {
+                                    card.is_dragging = true;
+                                }
+                            }
+                        }
                         self.dot_grid.clear_cards_cache();
                     }
                     DotGridMessage::CardLeftClickBody(card_id) => {
@@ -952,6 +978,7 @@ impl Cards {
 
                             self.editing_card_id = None;
                             self.selected_card_id = None;
+                            self.dot_grid.set_single_selected_card(None);
                             self.dot_grid.clear_cards_cache();
                         } else {
                             // First, stop editing ALL cards and update their checkbox positions
@@ -974,6 +1001,13 @@ impl Cards {
                             // Start editing the card and select it
                             self.editing_card_id = Some(card_id);
                             self.selected_card_id = Some(card_id);
+                            // Single click clears box selection
+                            self.selected_card_ids.clear();
+                            self.dot_grid.clear_selected_cards();
+                            // Editing border handles visual — clear single-select indicator
+                            self.dot_grid.set_single_selected_card(None);
+                            // Bring to front for correct layering
+                            self.dot_grid.bring_card_to_front(card_id);
                             if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                                 card.is_editing = true;
                                 // Move cursor to end of text
@@ -986,15 +1020,44 @@ impl Cards {
                         }
                     }
                     DotGridMessage::CardDrag(card_id, pos, drag_offset) => {
-                        if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
-                            if card.is_dragging {
-                                // Convert screen pos to world pos, accounting for drag offset
-                                let world_pos = Point::new(
-                                    pos.x - self.canvas_offset.x - drag_offset.x,
-                                    pos.y - self.canvas_offset.y - drag_offset.y,
-                                );
-                                card.target_position = world_pos;
-                                card.current_position = world_pos;
+                        let world_pos = Point::new(
+                            pos.x - self.canvas_offset.x - drag_offset.x,
+                            pos.y - self.canvas_offset.y - drag_offset.y,
+                        );
+
+                        if self.selected_card_ids.contains(&card_id) && self.selected_card_ids.len() > 1 {
+                            // Batch move: apply delta to all selected cards
+                            if let Some(prev) = self.last_drag_world_pos {
+                                let dx = world_pos.x - prev.x;
+                                let dy = world_pos.y - prev.y;
+                                let selected = self.selected_card_ids.clone();
+                                for card in self.dot_grid.cards_mut().iter_mut() {
+                                    if selected.contains(&card.id) {
+                                        let new_pos = Point::new(
+                                            card.current_position.x + dx,
+                                            card.current_position.y + dy,
+                                        );
+                                        card.target_position = new_pos;
+                                        card.current_position = new_pos;
+                                    }
+                                }
+                            } else {
+                                // First frame of batch drag: just move the primary card
+                                if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                    if card.is_dragging {
+                                        card.target_position = world_pos;
+                                        card.current_position = world_pos;
+                                    }
+                                }
+                            }
+                            self.last_drag_world_pos = Some(world_pos);
+                        } else {
+                            // Single card drag
+                            if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                if card.is_dragging {
+                                    card.target_position = world_pos;
+                                    card.current_position = world_pos;
+                                }
                             }
                         }
                         self.dot_grid.clear_cards_cache();
@@ -1039,14 +1102,30 @@ impl Cards {
                     }
                     DotGridMessage::CardDrop(card_id) => {
                         let dot_spacing = self.dot_grid.dot_spacing();
-                        if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
-                            card.is_dragging = false;
-                            let snapped = Card::snap_to_grid(card.current_position, dot_spacing);
-                            // Set both so the saved position is already snapped
-                            card.current_position = snapped;
-                            card.target_position = snapped;
+                        self.last_drag_world_pos = None;
+                        if self.selected_card_ids.contains(&card_id) && self.selected_card_ids.len() > 1 {
+                            // Snap all selected cards
+                            let selected = self.selected_card_ids.clone();
+                            for card in self.dot_grid.cards_mut().iter_mut() {
+                                if selected.contains(&card.id) {
+                                    card.is_dragging = false;
+                                    let snapped = Card::snap_to_grid(card.current_position, dot_spacing);
+                                    card.current_position = snapped;
+                                    card.target_position = snapped;
+                                }
+                            }
+                            // Keep multi-selection active after move
+                        } else {
+                            if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                card.is_dragging = false;
+                                let snapped = Card::snap_to_grid(card.current_position, dot_spacing);
+                                card.current_position = snapped;
+                                card.target_position = snapped;
+                            }
+                            // Select the card on release so the first click-and-drag works immediately
+                            self.selected_card_id = Some(card_id);
+                            self.dot_grid.set_single_selected_card(Some(card_id));
                         }
-                        self.selected_card_id = None;
                         self.dot_grid.clear_cards_cache();
                         self.workspace_dirty = true;
                     }
@@ -1071,6 +1150,35 @@ impl Cards {
                     DotGridMessage::LinkClick(url) => {
                         // Open URL in default browser, ignore errors silently
                         let _ = open::that(&url);
+                    }
+                    DotGridMessage::BoxSelectEnd(rect) => {
+                        let canvas_offset = self.dot_grid.offset();
+                        let mut ids = std::collections::HashSet::new();
+                        for card in self.dot_grid.cards() {
+                            let card_screen = Rectangle {
+                                x: card.current_position.x + canvas_offset.x,
+                                y: card.current_position.y + canvas_offset.y,
+                                width: card.width,
+                                height: card.height,
+                            };
+                            // Select cards that intersect the drag rectangle
+                            let intersects = rect.x < card_screen.x + card_screen.width
+                                && rect.x + rect.width > card_screen.x
+                                && rect.y < card_screen.y + card_screen.height
+                                && rect.y + rect.height > card_screen.y;
+                            if intersects {
+                                ids.insert(card.id);
+                            }
+                        }
+                        self.selected_card_ids = ids.clone();
+                        self.dot_grid.set_selected_cards(ids);
+                        // Clear single-card selection (box select replaces it)
+                        self.editing_card_id = None;
+                        self.selected_card_id = None;
+                        self.dot_grid.set_single_selected_card(None);
+                        for card in self.dot_grid.cards_mut().iter_mut() {
+                            card.is_editing = false;
+                        }
                     }
                     DotGridMessage::CardTextClick(card_id, click_pos) => {
                         // Get canvas offset first (before borrowing cards_mut)
@@ -1325,10 +1433,10 @@ impl Cards {
 
                     // Global shortcuts when NOT editing a card
                     if self.editing_card_id.is_none() {
-                        // Ctrl+A: Add a new card at the mouse position (or viewport centre as fallback)
-                        if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "a") {
-                            // Use mouse position if it's on the canvas (to the right of the sidebar),
-                            // otherwise fall back to the viewport centre.
+                        // N: Add a new card at the mouse position (or viewport centre as fallback)
+                        if !modifiers.control() && !modifiers.shift() && !modifiers.alt()
+                            && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "n")
+                        {
                             let sidebar_right = 15.0 + SIDEBAR_WIDTH + self.sidebar_offset;
                             let pos = if let Some(mouse) = self.mouse_position {
                                 if mouse.x > sidebar_right {
@@ -1344,7 +1452,8 @@ impl Cards {
                                 Point::new(cx, cy)
                             };
                             let card_id = self.dot_grid.add_card(pos, self.accent_color);
-                            // Auto-select and start editing
+                            self.selected_card_ids.clear();
+                            self.dot_grid.clear_selected_cards();
                             self.selected_card_id = Some(card_id);
                             self.editing_card_id = Some(card_id);
                             if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
@@ -1352,12 +1461,93 @@ impl Cards {
                                 card.content.move_cursor_to_end();
                             }
                             self.dot_grid.clear_cards_cache();
-                            self.save_workspace_to_file();
+                            self.workspace_dirty = true;
                             return Task::none();
                         }
+
+                        // Delete: delete selected card(s)
+                        if !modifiers.control() && matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete)) {
+                            if !self.selected_card_ids.is_empty() {
+                                let ids: Vec<usize> = self.selected_card_ids.drain().collect();
+                                for id in ids {
+                                    self.dot_grid.delete_card(id);
+                                }
+                                self.dot_grid.clear_selected_cards();
+                                self.selected_card_id = None;
+                                self.workspace_dirty = true;
+                            } else if let Some(card_id) = self.selected_card_id {
+                                if self.config.general.confirm_card_delete {
+                                    self.confirm_delete_card_id = Some(card_id);
+                                } else {
+                                    self.dot_grid.delete_card(card_id);
+                                    self.selected_card_id = None;
+                                    self.workspace_dirty = true;
+                                }
+                            }
+                            return Task::none();
+                        }
+
+                        // Ctrl+D: duplicate selected card(s)
+                        if modifiers.control() && !modifiers.shift()
+                            && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "d")
+                        {
+                            let dot_spacing = self.dot_grid.dot_spacing();
+                            let ids_to_dup: Vec<usize> = if !self.selected_card_ids.is_empty() {
+                                self.selected_card_ids.iter().copied().collect()
+                            } else if let Some(id) = self.selected_card_id {
+                                vec![id]
+                            } else {
+                                vec![]
+                            };
+                            let mut new_ids = Vec::new();
+                            for card_id in ids_to_dup {
+                                if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id).cloned() {
+                                    let new_pos = Point::new(
+                                        card.current_position.x + dot_spacing * 2.0,
+                                        card.current_position.y + dot_spacing * 2.0,
+                                    );
+                                    let new_id = self.dot_grid.add_card_with_size(
+                                        Point::new(
+                                            new_pos.x + self.canvas_offset.x,
+                                            new_pos.y + self.canvas_offset.y,
+                                        ),
+                                        &card.content.text(),
+                                        card.icon,
+                                        card.color,
+                                        card.width,
+                                        card.height,
+                                    );
+                                    if let Some(new_card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == new_id) {
+                                        new_card.card_type = card.card_type;
+                                    }
+                                    new_ids.push(new_id);
+                                }
+                            }
+                            if new_ids.len() == 1 {
+                                self.selected_card_id = Some(new_ids[0]);
+                                self.dot_grid.set_single_selected_card(Some(new_ids[0]));
+                                self.selected_card_ids.clear();
+                                self.dot_grid.clear_selected_cards();
+                            } else if new_ids.len() > 1 {
+                                self.selected_card_ids = new_ids.iter().copied().collect();
+                                self.dot_grid.set_selected_cards(self.selected_card_ids.clone());
+                                self.selected_card_id = None;
+                                self.dot_grid.set_single_selected_card(None);
+                            }
+                            self.dot_grid.clear_cards_cache();
+                            self.workspace_dirty = true;
+                            return Task::none();
+                        }
+
+                        // Escape: deselect multi-selection
                         if matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)) {
                             if self.confirm_delete_card_id.is_some() {
                                 self.confirm_delete_card_id = None;
+                                return Task::none();
+                            }
+                            if !self.selected_card_ids.is_empty() {
+                                self.selected_card_ids.clear();
+                                self.dot_grid.clear_selected_cards();
                                 return Task::none();
                             }
                         }
@@ -1389,14 +1579,18 @@ impl Cards {
                             self.update_exclude_region();
                             return Task::none();
                         } else if self.editing_card_id.is_some() {
-                            // Stop editing
+                            // Stop editing but keep card selected so Delete key still works
                             if let Some(card_id) = self.editing_card_id {
                                 if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                                     card.is_editing = false;
                                 }
+                                self.dot_grid.update_card_checkbox_positions(card_id);
+                                self.dot_grid.update_card_link_positions(card_id);
+                                // Show selection border now that editing border is gone
+                                self.dot_grid.set_single_selected_card(Some(card_id));
                             }
                             self.editing_card_id = None;
-                            self.selected_card_id = None;
+                            // Keep selected_card_id — toolbar stays visible, Delete key works
                             self.dot_grid.clear_cards_cache();
                             return Task::none();
                         }
@@ -1658,6 +1852,7 @@ impl Cards {
                 }
                 self.editing_card_id = None;
                 self.selected_card_id = None;
+                self.dot_grid.set_single_selected_card(None);
                 self.dot_grid.clear_cards_cache();
             }
             Message::HideCardIconMenu => {
@@ -1760,6 +1955,7 @@ impl Cards {
                         new_card.card_type = card.card_type;
                     }
                     self.selected_card_id = Some(new_card_id);
+                    self.dot_grid.set_single_selected_card(Some(new_card_id));
                     self.dot_grid.clear_cards_cache();
                     self.workspace_dirty = true;
                 }
@@ -2532,6 +2728,9 @@ impl Cards {
         self.active_board_index = 0;
         self.editing_card_id = None;
         self.selected_card_id = None;
+        self.selected_card_ids.clear();
+        self.dot_grid.clear_selected_cards();
+        self.last_drag_world_pos = None;
         self.card_icon_menu_position = None;
         self.card_icon_menu_card_id = None;
 
@@ -3057,7 +3256,25 @@ impl Cards {
         let accent_separator = accent_glow;
         let icon_color = self.theme.icon_color();
 
-        let main_content: Element<Message> = self.dot_grid.view().map(Message::DotGridMessage);
+        let canvas: Element<Message> = self.dot_grid.view().map(Message::DotGridMessage);
+
+        // CardLayer renders each card in its own compositor layer (renderer.with_layer)
+        // so text/SVGs composite correctly with fills — fixing the z-ordering issue.
+        let card_layer: Element<Message> = CardLayer::new(
+            self.dot_grid.cards(),
+            self.dot_grid.offset(),
+            self.dot_grid.card_background(),
+            self.dot_grid.card_border(),
+            self.dot_grid.card_text(),
+            self.dot_grid.accent_color(),
+            self.dot_grid.font(),
+            self.dot_grid.font_size(),
+            self.dot_grid.selected_cards(),
+            self.dot_grid.single_selected_card(),
+            self.dot_grid.hovered_card(),
+        ).into();
+
+        let main_content: Element<Message> = iced::widget::stack![canvas, card_layer].into();
 
         // Build the base view with main content
         let mut view: Element<Message> = main_content;
@@ -3081,46 +3298,8 @@ impl Cards {
             view = Overlay::new(view, context_menu).into();
         }
 
-        // Add icon overlays for all cards - renders Bootstrap Icons properly
-        for card in self.dot_grid.cards().iter() {
-            let icon_size = 18.0;
-            let top_bar_height = 30.0;
-            // Center the icon vertically in the top bar, and keep enough left
-            // margin to stay clear of the corner_radius=12 curve.
-            let icon_x = card.current_position.x + self.canvas_offset.x + 8.0;
-            let icon_y = card.current_position.y + self.canvas_offset.y + (top_bar_height - icon_size) / 2.0;
-
-            let svg_data = icon_util::icon_to_svg(card.icon.get_icondata());
-            let icon_widget = svg(svg::Handle::from_memory(svg_data))
-                .width(icon_size)
-                .height(icon_size)
-                .class(SvgStyle { color: card.color });
-
-            let positioned_icon: Element<Message> = Positioned::new(
-                icon_widget,
-                Point::new(icon_x, icon_y)
-            ).into();
-
-            view = Overlay::new(view, positioned_icon).into();
-
-            // Type icon on the right side of the top bar
-            let type_icon_handle = match card.card_type {
-                CardType::Text => self.icon_type_text.clone(),
-                CardType::Markdown => self.icon_type_markdown.clone(),
-            };
-            let type_icon_color = card.color;
-            let type_icon_x = card.current_position.x + self.canvas_offset.x + card.width - icon_size - 8.0;
-            let type_icon_y = icon_y;
-            let type_icon_widget = svg(type_icon_handle)
-                .width(icon_size)
-                .height(icon_size)
-                .class(SvgStyle { color: type_icon_color });
-            let positioned_type_icon: Element<Message> = Positioned::new(
-                type_icon_widget,
-                Point::new(type_icon_x, type_icon_y)
-            ).into();
-            view = Overlay::new(view, positioned_type_icon).into();
-        }
+        // Icons are now drawn directly inside the canvas in draw_cards(), so they
+        // z-order correctly with overlapping cards — no widget overlays needed here.
 
         // Add card toolbar (before sidebar) - shown when a card is selected
         if let Some(card_id) = self.selected_card_id {
@@ -5153,13 +5332,21 @@ impl Cards {
                     ("SEP", ""),
                     // Cards
                     ("SECTION", "Cards"),
-                    ("Ctrl + A",              "Add new card at canvas centre (auto-focuses)"),
+                    ("N",                     "New card at mouse / canvas centre"),
                     ("Right-click canvas",    "Open context menu  \u{2192}  Add Card"),
-                    ("Click",                 "Select card"),
-                    ("Double-click",          "Start editing card"),
+                    ("Click",                 "Edit card"),
                     ("Drag header",           "Move card"),
                     ("Drag \u{2198} handle",  "Resize card"),
-                    ("Esc",                   "Stop editing / deselect card"),
+                    ("Delete",                "Delete selected card(s)"),
+                    ("Ctrl + D",              "Duplicate selected card(s)"),
+                    ("Esc",                   "Stop editing / deselect"),
+                    ("SEP", ""),
+                    // Multi-select
+                    ("SECTION", "Multi-select"),
+                    ("Drag empty canvas",     "Box-select cards"),
+                    ("Drag header (multi)",   "Move all selected cards"),
+                    ("Delete (multi)",        "Delete all selected cards"),
+                    ("Ctrl + D (multi)",      "Duplicate all selected cards"),
                     ("SEP", ""),
                     // Text Editing
                     ("SECTION", "Text Editing"),

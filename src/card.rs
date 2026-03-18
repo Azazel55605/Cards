@@ -628,25 +628,27 @@ impl Card {
         )
     }
 
-    pub fn update_animation(&mut self, delta_time: f32) {
+    /// Returns `true` if the card's visual state changed (position or size moved).
+    pub fn update_animation(&mut self, delta_time: f32) -> bool {
         if delta_time <= 0.0 || delta_time > 0.1 {
-            // Skip if delta_time is invalid (too large or negative)
-            return;
+            return false;
         }
+
+        let mut changed = false;
 
         // Animate position
         let distance = ((self.target_position.x - self.current_position.x).powi(2)
                        + (self.target_position.y - self.current_position.y).powi(2)).sqrt();
 
         if distance > 0.5 {
-            // Smooth interpolation with easing
-            let speed = 10.0; // Higher = faster snap
+            let speed = 10.0;
             let t = 1.0 - (-speed * delta_time).exp();
-
             self.current_position.x += (self.target_position.x - self.current_position.x) * t;
             self.current_position.y += (self.target_position.y - self.current_position.y) * t;
-        } else {
+            changed = true;
+        } else if self.current_position != self.target_position {
             self.current_position = self.target_position;
+            changed = true;
         }
 
         // Animate size
@@ -654,16 +656,17 @@ impl Card {
         let height_diff = (self.target_height - self.height).abs();
 
         if width_diff > 0.5 || height_diff > 0.5 {
-            // Smooth interpolation with easing for size
-            let speed = 10.0; // Same speed as position for consistency
+            let speed = 10.0;
             let t = 1.0 - (-speed * delta_time).exp();
-
             self.width += (self.target_width - self.width) * t;
             self.height += (self.target_height - self.height) * t;
-        } else {
-            // Snap to target when close enough
+            changed = true;
+        } else if self.width != self.target_width || self.height != self.target_height {
             self.width = self.target_width;
             self.height = self.target_height;
+            changed = true;
         }
+
+        changed
     }
 }

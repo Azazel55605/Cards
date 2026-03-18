@@ -1,19 +1,24 @@
 use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder, gradient};
 use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector};
-use crate::card::{Card, CardType};
-use crate::markdown::MarkdownRenderer;
+use std::cell::Cell;
+use crate::card::Card;
+use std::collections::HashSet;
+
 
 pub struct DotGridState {
     last_cursor_pos: Option<Point>,
     is_panning: bool,
     pan_start: Option<Point>,
     dragging_card: Option<usize>,
-    drag_offset: Option<Point>, // Changed from drag_start_offset to drag_offset
+    drag_offset: Option<Point>,
     resizing_card: Option<usize>,
-    resize_start_size: Option<(f32, f32)>, // (width, height)
+    resize_start_size: Option<(f32, f32)>,
     resize_start_pos: Option<Point>,
-    hovered_card: Option<usize>, // NEW: Track which card is hovered
-    selecting_text_card: Option<usize>, // Track which card is being text-selected
+    hovered_card: Option<usize>,
+    selecting_text_card: Option<usize>,
+    // Box selection
+    box_select_start: Option<Point>,
+    box_select_end: Option<Point>,
 }
 
 impl Default for DotGridState {
@@ -29,6 +34,8 @@ impl Default for DotGridState {
             resize_start_pos: None,
             hovered_card: None,
             selecting_text_card: None,
+            box_select_start: None,
+            box_select_end: None,
         }
     }
 }
@@ -42,7 +49,9 @@ pub struct DotGrid {
     dot_color: Color,
     background_color: Color,
     static_cache: Cache,
-    cards_cache: Cache,
+    /// One cache per card, parallel to `cards` Vec — gives each card its own
+    /// Geometry layer so Iced composites them in z-order without type-batching.
+    card_caches: Vec<Cache>,
     offset: Vector,
     exclude_region: Option<Rectangle>,
     effect_enabled: bool,
@@ -58,6 +67,12 @@ pub struct DotGrid {
     next_card_id: usize,
     /// When true, all canvas input events are ignored (modal open etc.)
     pub blocked: bool,
+    /// Card IDs currently selected via box selection
+    selected_cards: HashSet<usize>,
+    /// Single card selected (not via box selection) — for toolbar + Delete key
+    single_selected_card: Option<usize>,
+    /// Currently hovered card — updated via Cell since Program::update takes &self
+    hovered_card: Cell<Option<usize>>,
 }
 
 impl DotGrid {
@@ -71,7 +86,7 @@ impl DotGrid {
             dot_color,
             background_color,
             static_cache: Cache::new(),
-            cards_cache: Cache::new(),
+            card_caches: Vec::new(),
             offset: Vector::new(0.0, 0.0),
             exclude_region: None,
             effect_enabled: true,
@@ -85,6 +100,9 @@ impl DotGrid {
             debug_mode: false,
             next_card_id: 0,
             blocked: false,
+            selected_cards: HashSet::new(),
+            single_selected_card: None,
+            hovered_card: Cell::new(None),
         }
     }
 
@@ -101,7 +119,7 @@ impl DotGrid {
                 println!("DEBUG: Updated card {} with font size {}", card.id, size);
             }
         }
-        self.cards_cache.clear();
+        self.clear_all_card_caches();
         if self.debug_mode {
             println!("DEBUG: Cards cache cleared");
         }
@@ -123,7 +141,7 @@ impl DotGrid {
     pub fn set_offset(&mut self, offset: Vector) {
         self.offset = offset;
         self.static_cache.clear();
-        self.cards_cache.clear();
+        self.clear_all_card_caches();
     }
 
     pub fn set_exclude_region(&mut self, region: Option<Rectangle>) {
@@ -159,12 +177,12 @@ impl DotGrid {
         self.card_background = background;
         self.card_border = border;
         self.card_text = text;
-        self.cards_cache.clear();
+        self.clear_all_card_caches();
     }
 
     pub fn set_accent_color(&mut self, color: Color) {
         self.accent_color = color;
-        self.cards_cache.clear();
+        self.clear_all_card_caches();
     }
 
     pub fn set_next_card_id(&mut self, id: usize) {
@@ -175,6 +193,78 @@ impl DotGrid {
         self.next_card_id
     }
 
+    /// Move a card to the end of the draw list so it renders on top.
+    pub fn bring_card_to_front(&mut self, card_id: usize) {
+        if let Some(idx) = self.cards.iter().position(|c| c.id == card_id) {
+            let card = self.cards.remove(idx);
+            let cache = self.card_caches.remove(idx);
+            self.cards.push(card);
+            self.card_caches.push(cache);
+        }
+    }
+
+    /// Replace the multi-selection set (used by box selection).
+    pub fn set_selected_cards(&mut self, ids: HashSet<usize>) {
+        self.selected_cards = ids;
+        self.clear_all_card_caches();
+    }
+
+    /// Clear the multi-selection set.
+    pub fn clear_selected_cards(&mut self) {
+        if !self.selected_cards.is_empty() {
+            self.selected_cards.clear();
+            self.clear_all_card_caches();
+        }
+    }
+
+    /// Set (or clear) the single-card selection indicator.
+    pub fn set_single_selected_card(&mut self, id: Option<usize>) {
+        if self.single_selected_card != id {
+            // Only invalidate the two affected cards, not all of them.
+            let old = self.single_selected_card;
+            self.single_selected_card = id;
+            if let Some(old_id) = old {
+                self.invalidate_card_cache(old_id);
+            }
+            if let Some(new_id) = id {
+                self.invalidate_card_cache(new_id);
+            }
+        }
+    }
+
+    fn clear_all_card_caches(&self) {
+        for c in &self.card_caches {
+            c.clear();
+        }
+    }
+
+    fn invalidate_card_cache(&self, card_id: usize) {
+        if let Some(pos) = self.cards.iter().position(|c| c.id == card_id) {
+            self.card_caches[pos].clear();
+        }
+    }
+
+    /// Find a non-overlapping snapped spawn position near `candidate`.
+    fn find_spawn_position(&self, candidate: Point) -> Point {
+        let mut pos = candidate;
+        for _ in 0..20 {
+            let overlapping = self.cards.iter().any(|c| {
+                let cx = c.current_position.x;
+                let cy = c.current_position.y;
+                (pos.x - cx).abs() < self.dot_spacing * 3.0
+                    && (pos.y - cy).abs() < self.dot_spacing * 3.0
+            });
+            if !overlapping {
+                break;
+            }
+            pos = Point::new(
+                pos.x + self.dot_spacing * 2.0,
+                pos.y + self.dot_spacing * 2.0,
+            );
+        }
+        pos
+    }
+
     pub fn add_card(&mut self, screen_position: Point, color: Color) -> usize {
         let id = self.next_card_id;
         self.next_card_id += 1;
@@ -183,16 +273,17 @@ impl DotGrid {
             screen_position.y - self.offset.y,
         );
         let snapped_position = Card::snap_to_grid(world_position, self.dot_spacing);
-        let mut card = Card::new(id, snapped_position);
+        let spawn_position = self.find_spawn_position(snapped_position);
+        let mut card = Card::new(id, spawn_position);
         if self.debug_mode {
             println!("DEBUG: Setting font on new card {}: font_size={}", id, self.font_size);
         }
         card.content.set_font(self.font, self.font_size);
         card.color = color;
         self.cards.push(card);
-        self.cards_cache.clear();
+        self.card_caches.push(Cache::new());
         if self.debug_mode {
-            println!("Added card {} at world position {:?}", id, snapped_position);
+            println!("Added card {} at world position {:?}", id, spawn_position);
         }
         id
     }
@@ -220,7 +311,7 @@ impl DotGrid {
         card.icon = icon;
         card.color = color;
         self.cards.push(card);
-        self.cards_cache.clear();
+        self.card_caches.push(Cache::new());
         id
     }
 
@@ -250,12 +341,12 @@ impl DotGrid {
         card.target_width = width;
         card.target_height = height;
         self.cards.push(card);
-        self.cards_cache.clear();
+        self.card_caches.push(Cache::new());
         id
     }
 
     pub fn clear_cards_cache(&mut self) {
-        self.cards_cache.clear();
+        self.clear_all_card_caches();
     }
 
     pub fn cards(&self) -> &[Card] {
@@ -267,20 +358,24 @@ impl DotGrid {
     }
     
     pub fn load_cards(&mut self, cards: Vec<Card>) {
+        let n = cards.len();
         self.cards = cards;
-        self.cards_cache.clear();
+        self.card_caches = (0..n).map(|_| Cache::new()).collect();
     }
 
     pub fn delete_card(&mut self, card_id: usize) {
-        self.cards.retain(|c| c.id != card_id);
-        self.cards_cache.clear();
+        if let Some(pos) = self.cards.iter().position(|c| c.id == card_id) {
+            self.cards.remove(pos);
+            self.card_caches.remove(pos);
+        }
     }
 
     pub fn update_card_animation(&mut self, delta_time: f32) {
-        for card in &mut self.cards {
-            card.update_animation(delta_time);
+        for (card, cache) in self.cards.iter_mut().zip(self.card_caches.iter_mut()) {
+            if card.update_animation(delta_time) {
+                cache.clear();
+            }
         }
-        self.cards_cache.clear();
     }
 
     pub fn dot_spacing(&self) -> f32 {
@@ -298,6 +393,14 @@ impl DotGrid {
     pub fn offset(&self) -> Vector {
         self.offset
     }
+
+    pub fn card_background(&self) -> Color { self.card_background }
+    pub fn card_border(&self) -> Color { self.card_border }
+    pub fn card_text(&self) -> Color { self.card_text }
+    pub fn accent_color(&self) -> Color { self.accent_color }
+    pub fn selected_cards(&self) -> &HashSet<usize> { &self.selected_cards }
+    pub fn single_selected_card(&self) -> Option<usize> { self.single_selected_card }
+    pub fn hovered_card(&self) -> Option<usize> { self.hovered_card.get() }
 
     pub fn is_editing_any_card(&self) -> bool {
         self.cards.iter().any(|card| card.is_editing)
@@ -511,185 +614,6 @@ impl DotGrid {
         }
     }
 
-    fn draw_cards(&self, frame: &mut Frame, _bounds: Rectangle, hovered_card: Option<usize>) {
-        for card in &self.cards {
-            let screen_x = card.current_position.x + self.offset.x;
-            let screen_y = card.current_position.y + self.offset.y;
-
-            let card_rect = Rectangle {
-                x: screen_x,
-                y: screen_y,
-                width: card.width,
-                height: card.height,
-            };
-
-            // Sidebar now uses renderer.with_layer() to ensure it renders on top of canvas
-            let corner_radius = 12.0;
-
-            // Draw card background — always plain, no gradient on body
-            frame.fill(
-                &rounded_rectangle(card_rect, corner_radius),
-                self.card_background,
-            );
-
-            // Draw card border
-            frame.stroke(
-                &rounded_rectangle(card_rect, corner_radius),
-                Stroke::default()
-                    .with_color(self.card_border)
-                    .with_width(1.0),
-            );
-
-            // Draw top bar background — subtle left-to-right gradient using the card's own color
-            let top_bar_height = 30.0;
-            let top_bar_rect = Rectangle {
-                x: card_rect.x,
-                y: card_rect.y,
-                width: card_rect.width,
-                height: top_bar_height,
-            };
-            {
-                let card_color = card.color;
-                // Left: fades from transparent border tint; right: card colour at low alpha
-                let bar_left = Color::from_rgba(
-                    self.card_border.r,
-                    self.card_border.g,
-                    self.card_border.b,
-                    0.15,
-                );
-                let bar_right = Color {
-                    r: card_color.r,
-                    g: card_color.g,
-                    b: card_color.b,
-                    a: 0.30,
-                };
-                let top_bar_grad = gradient::Linear::new(
-                    Point::new(top_bar_rect.x, top_bar_rect.y),
-                    Point::new(top_bar_rect.x + top_bar_rect.width, top_bar_rect.y),
-                )
-                .add_stop(0.0, bar_left)
-                .add_stop(1.0, bar_right);
-                frame.fill(
-                    &rounded_rectangle_top(top_bar_rect, corner_radius),
-                    top_bar_grad,
-                );
-            }
-
-            // Icons are now rendered as SVG widget overlays (not in canvas)
-
-            // Draw content or custom editor
-            let content_text = card.content.text();
-            
-            if card.is_editing {
-                // Render custom editor with cursor directly in canvas
-                let editor_bounds = Rectangle {
-                    x: card_rect.x,
-                    y: card_rect.y + top_bar_height,
-                    width: card_rect.width,
-                    height: card_rect.height - top_bar_height,
-                };
-                
-                // Cursor color based on theme
-                let cursor_color = if self.card_text.r > 0.5 {
-                    Color::WHITE
-                } else {
-                    Color::BLACK
-                };
-                
-                // Selection color — derived from the app accent colour
-                let ac = self.accent_color;
-                let selection_color = Color { a: 0.28, ..ac };
-
-                card.content.render(
-                    frame,
-                    editor_bounds,
-                    self.card_text,
-                    cursor_color,
-                    selection_color,
-                );
-            } else if !content_text.is_empty() {
-                // Render based on card type
-                let text_x = card_rect.x + 10.0;
-                let text_y = card_rect.y + top_bar_height + 10.0;
-                let max_width = card_rect.width - 20.0;
-                let max_height = card_rect.height - top_bar_height - 20.0;
-
-                match card.card_type {
-                    CardType::Markdown => {
-                        // Full markdown rendering — entire content treated as markdown
-                        // Code bg: semi-transparent overlay relative to card text color
-                        let code_bg = Color { a: 0.12, ..self.card_text };
-                        let renderer = MarkdownRenderer::with_fonts_size_height_and_link(
-                            self.card_text,
-                            max_width,
-                            max_height,
-                            self.font,
-                            self.font_size,
-                            card.color, // use the card's own colour for links
-                        );
-                        let mut renderer = renderer;
-                        renderer.set_code_bg(code_bg);
-                        let (_height, _checkbox_positions, _link_positions) = renderer.render_as_markdown(frame, &content_text, Point::new(text_x, text_y));
-                    }
-                    CardType::Text => {
-                        // Plain text rendering — no markdown parsing
-                        use crate::text_document::{TextDocument, TextLine, TextStyle};
-                        use crate::text_renderer::TextRenderer;
-                        let default_style = TextStyle::with_base_size(self.font_size);
-                        let mut doc = TextDocument::new();
-                        for line in content_text.lines() {
-                            let mut text_line = TextLine::new();
-                            text_line.add_segment(line.to_string(), default_style);
-                            doc.add_line(text_line);
-                        }
-                        let renderer = TextRenderer::with_fonts_and_height(
-                            self.card_text,
-                            max_width,
-                            max_height,
-                            self.font,
-                            self.font,
-                        );
-                        let _ = renderer.render(frame, &doc, Point::new(text_x, text_y));
-                    }
-                }
-            }
-
-            // Draw editing indicator (use card's color for border when editing)
-            if card.is_editing {
-                frame.stroke(
-                    &rounded_rectangle(card_rect, corner_radius),
-                    Stroke::default()
-                        .with_color(card.color)
-                        .with_width(3.0),
-                );
-            }
-
-            // Draw resize handle when editing OR hovering
-            let show_resize_handle = card.is_editing || hovered_card == Some(card.id);
-            if show_resize_handle {
-                let handle_size = 16.0;
-                let handle_x = card_rect.x + card_rect.width - handle_size;
-                let handle_y = card_rect.y + card_rect.height - handle_size;
-
-                // Draw resize handle background
-                frame.fill(
-                    &Path::rectangle(Point::new(handle_x, handle_y), iced::Size::new(handle_size, handle_size)),
-                    card.color,
-                );
-
-                // Draw resize grip lines
-                let grip_color = if self.card_text.r > 0.5 { Color::BLACK } else { Color::WHITE };
-                for i in 0..3 {
-                    let offset = (i as f32 * 4.0) + 4.0;
-                    let line = Path::line(
-                        Point::new(handle_x + offset, handle_y + handle_size - 2.0),
-                        Point::new(handle_x + handle_size - 2.0, handle_y + offset),
-                    );
-                    frame.stroke(&line, Stroke::default().with_color(grip_color).with_width(1.5));
-                }
-            }
-        }
-    }
 }
 
 /// Create a rounded rectangle path
@@ -749,48 +673,6 @@ fn rounded_rectangle(rect: Rectangle, radius: f32) -> Path {
     builder.build()
 }
 
-/// Create a rounded rectangle path with only top corners rounded
-fn rounded_rectangle_top(rect: Rectangle, radius: f32) -> Path {
-    let mut builder = Builder::new();
-
-    let x = rect.x;
-    let y = rect.y;
-    let width = rect.width;
-    let height = rect.height;
-    let r = radius.min(width / 2.0).min(height / 2.0);
-
-    // Start at top-left, after the corner
-    builder.move_to(Point::new(x + r, y));
-
-    // Top edge
-    builder.line_to(Point::new(x + width - r, y));
-
-    // Top-right corner
-    builder.arc_to(
-        Point::new(x + width, y),
-        Point::new(x + width, y + r),
-        r,
-    );
-
-    // Right edge (full height)
-    builder.line_to(Point::new(x + width, y + height));
-
-    // Bottom edge (no rounding)
-    builder.line_to(Point::new(x, y + height));
-
-    // Left edge (full height)
-    builder.line_to(Point::new(x, y + r));
-
-    // Top-left corner
-    builder.arc_to(
-        Point::new(x, y),
-        Point::new(x + r, y),
-        r,
-    );
-
-    builder.close();
-    builder.build()
-}
 
 #[derive(Debug, Clone)]
 pub enum DotGridMessage {
@@ -809,6 +691,7 @@ pub enum DotGridMessage {
     CardResizeEnd(usize),
     CheckboxToggle(usize, usize), // (card_id, line_index)
     LinkClick(String),            // url to open
+    BoxSelectEnd(Rectangle),      // box selection finished — rect in screen coords
 }
 
 impl Program<DotGridMessage> for &DotGrid {
@@ -823,13 +706,14 @@ impl Program<DotGridMessage> for &DotGrid {
     ) -> (iced::widget::canvas::event::Status, Option<DotGridMessage>) {
         // All input is blocked while a modal is open
         if self.blocked {
-            // Also clear any in-progress drag/pan so it doesn't resume after close
             state.is_panning = false;
             state.pan_start = None;
             state.dragging_card = None;
             state.drag_offset = None;
             state.resizing_card = None;
             state.selecting_text_card = None;
+            state.box_select_start = None;
+            state.box_select_end = None;
             return (iced::widget::canvas::event::Status::Ignored, None);
         }
 
@@ -852,11 +736,10 @@ impl Program<DotGridMessage> for &DotGrid {
                     }
                     mouse::Event::ButtonPressed(mouse::Button::Left) => {
                         if let Some(pos) = current_pos {
-                            // First check if we're clicking outside all cards while editing
-                            let clicked_on_card = false;
                             let mut is_editing_any = false;
 
-                            for card in &self.cards {
+                            // Iterate in reverse so clicks hit the top-most (highest z-order) card first
+                            for card in self.cards.iter().rev() {
                                 if card.is_editing {
                                     is_editing_any = true;
                                 }
@@ -971,13 +854,17 @@ impl Program<DotGridMessage> for &DotGrid {
                                 }
                             }
 
-                            // If we're editing and clicked outside all cards, stop editing
-                            if is_editing_any && !clicked_on_card {
+                            // If editing and clicked outside all cards, stop editing
+                            if is_editing_any {
                                 return (
                                     iced::widget::canvas::event::Status::Captured,
                                     Some(DotGridMessage::CardLeftClickBody(usize::MAX)),
                                 );
                             }
+                            // Not editing — start box selection on empty canvas
+                            state.box_select_start = Some(pos);
+                            state.box_select_end = Some(pos);
+                            return (iced::widget::canvas::event::Status::Captured, None);
                         }
                     }
                     mouse::Event::ButtonReleased(mouse::Button::Left) => {
@@ -1004,11 +891,25 @@ impl Program<DotGridMessage> for &DotGrid {
                         if state.selecting_text_card.is_some() {
                             state.selecting_text_card = None;
                         }
+
+                        // Finish box selection
+                        if let (Some(start), Some(end)) = (state.box_select_start.take(), state.box_select_end.take()) {
+                            let x = start.x.min(end.x);
+                            let y = start.y.min(end.y);
+                            let w = (start.x - end.x).abs();
+                            let h = (start.y - end.y).abs();
+                            let rect = Rectangle { x, y, width: w, height: h };
+                            self.clear_all_card_caches();
+                            return (
+                                iced::widget::canvas::event::Status::Captured,
+                                Some(DotGridMessage::BoxSelectEnd(rect)),
+                            );
+                        }
                     }
                     mouse::Event::ButtonPressed(mouse::Button::Right) => {
                         if let Some(pos) = current_pos {
-                            // Check if clicking on a card icon
-                            for card in &self.cards {
+                            // Check if clicking on a card icon — iterate reverse for correct z-order
+                            for card in self.cards.iter().rev() {
                                 let screen_bounds = Rectangle {
                                     x: card.current_position.x + self.offset.x,
                                     y: card.current_position.y + self.offset.y,
@@ -1053,6 +954,11 @@ impl Program<DotGridMessage> for &DotGrid {
                                     iced::widget::canvas::event::Status::Captured,
                                     Some(DotGridMessage::Pan(delta)),
                                 );
+                            }
+                        } else if state.box_select_start.is_some() {
+                            if let Some(pos) = current_pos {
+                                state.box_select_end = Some(pos);
+                                return (iced::widget::canvas::event::Status::Captured, None);
                             }
                         } else if let Some(card_id) = state.selecting_text_card {
                             // Handle text selection drag
@@ -1100,7 +1006,8 @@ impl Program<DotGridMessage> for &DotGrid {
         // Update hovered card for resize handle display
         if let Some(pos) = current_pos {
             let mut new_hovered = None;
-            for card in &self.cards {
+            // Iterate in reverse so the top-most (highest z-order) card is found first
+            for card in self.cards.iter().rev() {
                 let screen_bounds = Rectangle {
                     x: card.current_position.x + self.offset.x,
                     y: card.current_position.y + self.offset.y,
@@ -1115,14 +1022,19 @@ impl Program<DotGridMessage> for &DotGrid {
             }
 
             if state.hovered_card != new_hovered {
+                if let Some(old_id) = state.hovered_card {
+                    self.invalidate_card_cache(old_id);
+                }
+                if let Some(new_id) = new_hovered {
+                    self.invalidate_card_cache(new_id);
+                }
                 state.hovered_card = new_hovered;
-                self.cards_cache.clear(); // Force redraw to show/hide resize handle
+                self.hovered_card.set(new_hovered);
             }
-        } else {
-            if state.hovered_card.is_some() {
-                state.hovered_card = None;
-                self.cards_cache.clear();
-            }
+        } else if state.hovered_card.is_some() {
+            self.invalidate_card_cache(state.hovered_card.unwrap());
+            self.hovered_card.set(None);
+            state.hovered_card = None;
         }
 
         (iced::widget::canvas::event::Status::Ignored, None)
@@ -1141,24 +1053,50 @@ impl Program<DotGridMessage> for &DotGrid {
             self.draw_static_dots(frame, bounds);
         });
 
-        // If effect is disabled, just return static layer and draw cards on top
+        // Helper: build selection-box overlay geometry (uncached)
+        let selection_overlay: Option<Geometry> = {
+            if let (Some(start), Some(end)) = (state.box_select_start, state.box_select_end) {
+                let w = (start.x - end.x).abs();
+                let h = (start.y - end.y).abs();
+                if w > 3.0 || h > 3.0 {
+                    let sx = start.x.min(end.x);
+                    let sy = start.y.min(end.y);
+                    let sel_rect = Rectangle { x: sx, y: sy, width: w, height: h };
+                    let fill_col = Color::from_rgba(
+                        self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.10);
+                    let border_col = Color::from_rgba(
+                        self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.80);
+                    let mut sel_frame = Frame::new(renderer, bounds.size());
+                    sel_frame.fill_rectangle(
+                        Point::new(sx, sy), iced::Size::new(w, h), fill_col);
+                    sel_frame.stroke(
+                        &rounded_rectangle(sel_rect, 2.0),
+                        Stroke::default().with_color(border_col).with_width(1.5),
+                    );
+                    Some(sel_frame.into_geometry())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        // If effect is disabled, just return static layer + selection overlay.
+        // Cards are rendered by CardLayer widget (with_layer per card for correct z-ordering).
         if !self.effect_enabled {
-            let hovered = state.hovered_card;
-            let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-                self.draw_cards(frame, bounds, hovered);
-            });
-            return vec![static_layer, cards_layer];
+            let mut layers = vec![static_layer];
+            if let Some(ov) = selection_overlay { layers.push(ov); }
+            return layers;
         }
 
         let local_mouse = cursor.position_in(bounds);
 
-        // If no mouse in bounds, just return static and cards layers
+        // If no mouse in bounds, just return static layer + selection overlay.
         if local_mouse.is_none() {
-            let hovered = state.hovered_card;
-            let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-                self.draw_cards(frame, bounds, hovered);
-            });
-            return vec![static_layer, cards_layer];
+            let mut layers = vec![static_layer];
+            if let Some(ov) = selection_overlay { layers.push(ov); }
+            return layers;
         }
 
         let mouse_pos = local_mouse.unwrap();
@@ -1184,11 +1122,9 @@ impl Program<DotGridMessage> for &DotGrid {
         let max_row = (mouse_row + affect_range).min(rows - 1);
 
         if max_col < min_col || max_row < min_row {
-            let hovered = state.hovered_card;
-            let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-                self.draw_cards(frame, bounds, hovered);
-            });
-            return vec![static_layer, cards_layer];
+            let mut layers = vec![static_layer];
+            if let Some(ov) = selection_overlay { layers.push(ov); }
+            return layers;
         }
 
         let influence_radius_sq = self.influence_radius * self.influence_radius;
@@ -1297,13 +1233,10 @@ impl Program<DotGridMessage> for &DotGrid {
             }
         }
 
-        // Draw cards layer LAST so they appear on top
-        let hovered = state.hovered_card;
-        let cards_layer = self.cards_cache.draw(renderer, bounds.size(), |frame| {
-            self.draw_cards(frame, bounds, hovered);
-        });
-
-        vec![static_layer, dynamic_frame.into_geometry(), cards_layer]
+        // Cards are now rendered by CardLayer widget (with_layer per card).
+        let mut layers = vec![static_layer, dynamic_frame.into_geometry()];
+        if let Some(ov) = selection_overlay { layers.push(ov); }
+        layers
     }
 
     fn mouse_interaction(
