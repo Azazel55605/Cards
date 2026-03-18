@@ -31,8 +31,9 @@ use crate::theme::Theme;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilePickerMode {
-    /// Pick an existing file — only show files whose extension matches
-    Open { filter_ext: String },
+    /// Pick an existing file — only show files whose extension is in the list
+    /// (empty list = show all files)
+    Open { filter_exts: Vec<String> },
     /// Choose a directory + filename to save to
     Save { default_name: String },
 }
@@ -104,12 +105,15 @@ impl FilePickerState {
         dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-        // In Open mode, filter files by extension (empty string = show all)
-        if let FilePickerMode::Open { ref filter_ext } = self.mode {
-            if !filter_ext.is_empty() {
+        // In Open mode, filter files by extension (empty list = show all)
+        if let FilePickerMode::Open { ref filter_exts } = self.mode {
+            if !filter_exts.is_empty() {
                 files.retain(|f| {
                     f.path.extension()
-                        .map(|e| e.to_string_lossy().to_lowercase() == filter_ext.to_lowercase())
+                        .map(|e| {
+                            let ext = e.to_string_lossy().to_lowercase();
+                            filter_exts.iter().any(|fe| fe.to_lowercase() == ext)
+                        })
                         .unwrap_or(false)
                 });
             }

@@ -1,6 +1,43 @@
 use iced::{Color, Point, Rectangle};
+use std::sync::Arc;
 use crate::custom_text_editor::CustomTextEditor;
 use crate::text_renderer::{CheckboxPosition, LinkPosition};
+
+/// A decoded/ready-to-render image handle (raster or SVG).
+/// The handle is cached inside the card to avoid re-allocating every frame.
+#[derive(Clone)]
+pub enum CardImageHandle {
+    Raster(iced::advanced::image::Handle),
+    Svg(iced::advanced::svg::Handle),
+}
+
+impl std::fmt::Debug for CardImageHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Raster(_) => write!(f, "Raster(...)"),
+            Self::Svg(_)    => write!(f, "Svg(...)"),
+        }
+    }
+}
+
+/// Returns true if `bytes` look like an SVG document.
+pub fn bytes_are_svg(bytes: &[u8]) -> bool {
+    // Skip BOM / leading whitespace, then look for XML/SVG markers
+    let trimmed = bytes.iter()
+        .position(|&b| !b.is_ascii_whitespace())
+        .map(|i| &bytes[i..])
+        .unwrap_or(bytes);
+    trimmed.starts_with(b"<svg") || trimmed.starts_with(b"<?xml") || trimmed.starts_with(b"<!DOCTYPE svg")
+}
+
+/// Build a cached image handle from raw bytes.
+pub fn build_image_handle(bytes: &[u8], is_svg: bool) -> CardImageHandle {
+    if is_svg {
+        CardImageHandle::Svg(iced::advanced::svg::Handle::from_memory(bytes.to_vec()))
+    } else {
+        CardImageHandle::Raster(iced::advanced::image::Handle::from_bytes(bytes.to_vec()))
+    }
+}
 
 /// Style of a connection line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,21 +113,25 @@ pub enum CardType {
     Text,
     /// Full markdown — rendered with the markdown parser.
     Markdown,
+    /// Image card — holds raster (PNG/JPEG/GIF/BMP/WebP) or SVG image data.
+    Image,
 }
 
 impl CardType {
     pub fn label(&self) -> &'static str {
         match self {
-            CardType::Text => "Text",
+            CardType::Text     => "Text",
             CardType::Markdown => "Markdown",
+            CardType::Image    => "Image",
         }
     }
 
     /// Serialize to a stable string (for workspace files).
     pub fn as_str(&self) -> &'static str {
         match self {
-            CardType::Text => "Text",
+            CardType::Text     => "Text",
             CardType::Markdown => "Markdown",
+            CardType::Image    => "Image",
         }
     }
 
@@ -98,7 +139,8 @@ impl CardType {
     pub fn from_str(s: &str) -> Self {
         match s {
             "Markdown" => CardType::Markdown,
-            _ => CardType::Text,
+            "Image"    => CardType::Image,
+            _          => CardType::Text,
         }
     }
 }
@@ -120,6 +162,10 @@ pub struct Card {
     pub is_editing: bool,
     pub checkbox_positions: Vec<CheckboxPosition>,
     pub link_positions: Vec<LinkPosition>,
+    // Image card fields
+    pub image_data:   Option<Arc<Vec<u8>>>,
+    pub image_is_svg: bool,
+    pub image_handle: Option<CardImageHandle>,
 }
 
 impl Clone for Card {
@@ -140,6 +186,9 @@ impl Clone for Card {
             is_editing: self.is_editing,
             checkbox_positions: self.checkbox_positions.clone(),
             link_positions: self.link_positions.clone(),
+            image_data:   self.image_data.clone(),
+            image_is_svg: self.image_is_svg,
+            image_handle: self.image_handle.clone(),
         }
     }
 }
@@ -636,7 +685,19 @@ impl Card {
             is_editing: false,
             checkbox_positions: Vec::new(),
             link_positions: Vec::new(),
+            image_data:   None,
+            image_is_svg: false,
+            image_handle: None,
         }
+    }
+
+    /// Load image bytes into this card, building a cached render handle.
+    pub fn set_image(&mut self, bytes: Vec<u8>) {
+        let is_svg = bytes_are_svg(&bytes);
+        let arc = Arc::new(bytes);
+        self.image_handle = Some(build_image_handle(&arc, is_svg));
+        self.image_data   = Some(arc);
+        self.image_is_svg = is_svg;
     }
 
     pub fn bounds(&self) -> Rectangle {

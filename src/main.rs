@@ -285,6 +285,10 @@ pub enum Message {
     ConnToggleArrowFrom { from_card: usize, from_side: card::CardSide, to_card: usize, to_side: card::CardSide },
     ConnToggleArrowTo   { from_card: usize, from_side: card::CardSide, to_card: usize, to_side: card::CardSide },
     ConnDelete          { from_card: usize, from_side: card::CardSide, to_card: usize, to_side: card::CardSide },
+    // Image picker
+    OpenImagePicker(usize),
+    ImagePickerMsg(FilePickerMessage),
+    CloseImagePicker,
 }
 
 struct Cards {
@@ -373,6 +377,9 @@ struct Cards {
     icon_fmt_codeblock: svg::Handle,
     icon_fmt_heading: svg::Handle,
     icon_fmt_bullet: svg::Handle,
+    icon_type_image: svg::Handle,
+    // Image picker (card_id, picker state)
+    image_picker: Option<(usize, FilePickerState)>,
     window_size: iced::Size,
     last_tick: Instant,
     // Workspace persistence
@@ -516,6 +523,8 @@ impl Cards {
             icon_fmt_codeblock: svg::Handle::from_memory(include_bytes!("icons/fmt-codeblock.svg")),
             icon_fmt_heading: svg::Handle::from_memory(include_bytes!("icons/fmt-heading.svg")),
             icon_fmt_bullet: svg::Handle::from_memory(include_bytes!("icons/fmt-bullet.svg")),
+            icon_type_image: svg::Handle::from_memory(include_bytes!("icons/type-image.svg")),
+            image_picker: None,
             window_size: iced::Size::new(800.0, 600.0),
             last_tick: Instant::now(),
             workspace_path: None,
@@ -1028,6 +1037,35 @@ impl Cards {
                                 self.dot_grid.update_card_link_positions(id);
                             }
 
+                            // For image cards, open the image picker instead of editing
+                            let is_image_card = self.dot_grid.cards().iter()
+                                .find(|c| c.id == card_id)
+                                .map(|c| c.card_type == CardType::Image)
+                                .unwrap_or(false);
+
+                            if is_image_card {
+                                self.selected_card_id = Some(card_id);
+                                self.selected_card_ids.clear();
+                                self.dot_grid.clear_selected_cards();
+                                self.dot_grid.set_single_selected_card(Some(card_id));
+                                self.context_menu_position = None;
+                                self.card_icon_menu_position = None;
+                                // Open image file picker
+                                let start_dir = dirs::picture_dir()
+                                    .or_else(dirs::home_dir)
+                                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                                let picker = FilePickerState::new(
+                                    FilePickerMode::Open { filter_exts: vec![
+                                        "png".into(), "jpg".into(), "jpeg".into(),
+                                        "gif".into(), "bmp".into(), "webp".into(),
+                                        "svg".into(),
+                                    ]},
+                                    start_dir,
+                                    "Select Image",
+                                );
+                                self.image_picker = Some((card_id, picker));
+                                self.dot_grid.clear_cards_cache();
+                            } else {
                             // Start editing the card and select it
                             self.editing_card_id = Some(card_id);
                             self.selected_card_id = Some(card_id);
@@ -1047,6 +1085,7 @@ impl Cards {
                             self.context_menu_position = None;
                             self.card_icon_menu_position = None;
                             self.dot_grid.clear_cards_cache();
+                            }
                         }
                     }
                     DotGridMessage::CardDrag(card_id, pos, drag_offset) => {
@@ -1377,6 +1416,22 @@ impl Cards {
                     }
                     self.dot_grid.clear_cards_cache();
                     self.workspace_dirty = true;
+                    // For image cards, immediately open the image picker
+                    if card_type == CardType::Image {
+                        let start_dir = dirs::picture_dir()
+                            .or_else(dirs::home_dir)
+                            .unwrap_or_else(|| std::path::PathBuf::from("."));
+                        let picker = FilePickerState::new(
+                            FilePickerMode::Open { filter_exts: vec![
+                                "png".into(), "jpg".into(), "jpeg".into(),
+                                "gif".into(), "bmp".into(), "webp".into(),
+                                "svg".into(),
+                            ]},
+                            start_dir,
+                            "Select Image",
+                        );
+                        self.image_picker = Some((card_id, picker));
+                    }
                 }
                 self.context_menu_position = None;
                 self.pending_card_position = None;
@@ -2356,7 +2411,7 @@ impl Cards {
                         let start_dir = WorkspaceFile::default_dir()
                             .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
                         let picker = FilePickerState::new(
-                            FilePickerMode::Open { filter_ext: "cards".to_string() },
+                            FilePickerMode::Open { filter_exts: vec!["cards".to_string()] },
                             start_dir,
                             "Open Workspace",
                         );
@@ -2367,7 +2422,7 @@ impl Cards {
                             .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
                         // Empty filter = show all files (json, cards-workspace, etc.)
                         let picker = FilePickerState::new(
-                            FilePickerMode::Open { filter_ext: String::new() },
+                            FilePickerMode::Open { filter_exts: vec![] },
                             start_dir,
                             "Import Workspace",
                         );
@@ -2462,7 +2517,7 @@ impl Cards {
                 let start_dir = WorkspaceFile::default_dir()
                     .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")));
                 let picker = FilePickerState::new(
-                    FilePickerMode::Open { filter_ext: "cards".to_string() },
+                    FilePickerMode::Open { filter_exts: vec!["cards".to_string()] },
                     start_dir,
                     "Open Workspace",
                 );
@@ -2598,6 +2653,82 @@ impl Cards {
 
             Message::ImportExport(ie_msg) => {
                 self.handle_import_export_message(ie_msg);
+            }
+
+            Message::OpenImagePicker(card_id) => {
+                let start_dir = dirs::picture_dir()
+                    .or_else(dirs::home_dir)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let picker = FilePickerState::new(
+                    FilePickerMode::Open { filter_exts: vec![
+                        "png".into(), "jpg".into(), "jpeg".into(),
+                        "gif".into(), "bmp".into(), "webp".into(),
+                        "svg".into(),
+                    ]},
+                    start_dir,
+                    "Select Image",
+                );
+                self.image_picker = Some((card_id, picker));
+            }
+
+            Message::ImagePickerMsg(msg) => {
+                if let Some((card_id, ref mut picker)) = self.image_picker {
+                    match &msg {
+                        FilePickerMessage::Cancel => {
+                            self.image_picker = None;
+                        }
+                        FilePickerMessage::Confirm => {
+                            if let Some(path) = picker.confirmed_path() {
+                                if let Ok(bytes) = std::fs::read(&path) {
+                                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                        card.set_image(bytes);
+                                    }
+                                    self.workspace_dirty = true;
+                                    self.dot_grid.clear_cards_cache();
+                                }
+                                self.image_picker = None;
+                            }
+                        }
+                        FilePickerMessage::SelectFile(name) => {
+                            // Auto-confirm on single click — no need for a separate Open button
+                            let path = picker.current_dir.join(name);
+                            if path.exists() {
+                                if let Ok(bytes) = std::fs::read(&path) {
+                                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                                        card.set_image(bytes);
+                                    }
+                                    self.workspace_dirty = true;
+                                    self.dot_grid.clear_cards_cache();
+                                }
+                                self.image_picker = None;
+                            }
+                        }
+                        FilePickerMessage::EnterDir(path) => {
+                            picker.enter(path.clone());
+                        }
+                        FilePickerMessage::GoUp => {
+                            picker.go_up();
+                        }
+                        FilePickerMessage::FileNameInput(s) => {
+                            picker.file_name = s.clone();
+                        }
+                        FilePickerMessage::GoToPlace(path) => {
+                            picker.enter(path.clone());
+                        }
+                        FilePickerMessage::ToggleDrive(path) => {
+                            if picker.expanded_drives.contains(path) {
+                                picker.expanded_drives.remove(path);
+                            } else {
+                                picker.expanded_drives.insert(path.clone());
+                            }
+                        }
+                        FilePickerMessage::Extra(_) => {}
+                    }
+                }
+            }
+
+            Message::CloseImagePicker => {
+                self.image_picker = None;
             }
         }
 
@@ -2897,6 +3028,13 @@ impl Cards {
                 card.target_width = cd.width;
                 card.target_height = cd.height;
                 card.target_position = card.current_position;
+                // Restore image data and rebuild the cached render handle
+                if let Some(img_bytes) = cd.image_data.clone() {
+                    card.image_is_svg = cd.image_is_svg;
+                    let arc = std::sync::Arc::new(img_bytes);
+                    card.image_handle = Some(crate::card::build_image_handle(&arc, cd.image_is_svg));
+                    card.image_data = Some(arc);
+                }
                 cards.push(card);
             }
             self.board_cards.insert(board_idx, cards);
@@ -4518,6 +4656,16 @@ impl Cards {
                 .into();
         }
 
+        // Image picker modal — topmost
+        if let Some((_, ref picker_state)) = self.image_picker {
+            let img_overlay = file_picker::view(picker_state, self.theme, self.accent_color)
+                .map(Message::ImagePickerMsg);
+            view = Overlay::new(view, img_overlay)
+                .modal()
+                .on_backdrop_press(Message::CloseImagePicker)
+                .into();
+        }
+
         view
     }
 
@@ -4545,7 +4693,8 @@ impl Cards {
         self.dot_grid.blocked = self.workspace_modal.is_some()
             || self.settings_open
             || self.confirm_delete_card_id.is_some()
-            || self.import_export_modal.is_some();
+            || self.import_export_modal.is_some()
+            || self.image_picker.is_some();
     }
 
     fn update_exclude_region(&mut self) {
@@ -4815,11 +4964,35 @@ impl Cards {
                 ..Default::default()
             });
 
+        let sep2 = container(Space::with_height(1))
+            .width(Length::Fill).height(1)
+            .style(move |_: &IcedTheme| container::Style {
+                background: Some(iced::Background::Color(separator_color)),
+                ..Default::default()
+            });
+
+        let add_img_btn = button(
+            row![
+                svg(self.icon_type_image.clone())
+                    .width(15).height(15)
+                    .class(SvgStyle { color: icon_color }),
+                text("Image Card").size(13).color(text_color),
+            ]
+            .spacing(9)
+            .align_y(Alignment::Center)
+            .padding(item_padding)
+        )
+        .width(Length::Fill)
+        .class(btn_style.clone())
+        .on_press(Message::AddCardOfType(CardType::Image));
+
         container(
             column![
                 add_text_btn,
                 sep,
                 add_md_btn,
+                sep2,
+                add_img_btn,
             ]
             .padding(4.0)
         )
@@ -4855,8 +5028,9 @@ impl Cards {
 
         let item_padding = Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 };
 
-        let text_style = if current_type == CardType::Text { active_style.clone() } else { btn_style.clone() };
-        let md_style   = if current_type == CardType::Markdown { active_style.clone() } else { btn_style.clone() };
+        let text_style  = if current_type == CardType::Text     { active_style.clone() } else { btn_style.clone() };
+        let md_style    = if current_type == CardType::Markdown { active_style.clone() } else { btn_style.clone() };
+        let img_style   = if current_type == CardType::Image    { active_style.clone() } else { btn_style.clone() };
 
         let text_btn = button(
             row![
@@ -4888,8 +5062,26 @@ impl Cards {
                 background: Some(iced::Background::Color(separator_color)),
                 ..Default::default()
             });
+        let sep2 = container(Space::with_height(1))
+            .width(Length::Fill).height(1)
+            .style(move |_: &IcedTheme| container::Style {
+                background: Some(iced::Background::Color(separator_color)),
+                ..Default::default()
+            });
 
-        container(column![text_btn, sep, md_btn].padding(4.0)).into()
+        let img_btn = button(
+            row![
+                svg(self.icon_type_image.clone()).width(15).height(15)
+                    .class(SvgStyle { color: icon_color }),
+                text("Image").size(13).color(text_color),
+            ]
+            .spacing(9).align_y(Alignment::Center).padding(item_padding)
+        )
+        .width(Length::Fill)
+        .class(img_style)
+        .on_press(Message::ChangeCardType(card_id, CardType::Image));
+
+        container(column![text_btn, sep, md_btn, sep2, img_btn].padding(4.0)).into()
     }
 
     fn build_card_icon_menu(&self) -> Element<Message> {

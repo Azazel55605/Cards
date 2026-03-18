@@ -87,7 +87,7 @@ impl ImportExportState {
 
     pub fn new_import_workspace(start_dir: std::path::PathBuf) -> Self {
         let picker = FilePickerState::new(
-            FilePickerMode::Open { filter_ext: String::new() }, // accept all, validated after
+            FilePickerMode::Open { filter_exts: vec![] }, // accept all, validated after
             start_dir,
             "Import Workspace",
         );
@@ -96,7 +96,7 @@ impl ImportExportState {
 
     pub fn new_import_board(start_dir: std::path::PathBuf) -> Self {
         let picker = FilePickerState::new(
-            FilePickerMode::Open { filter_ext: String::new() },
+            FilePickerMode::Open { filter_exts: vec![] },
             start_dir,
             "Import Board",
         );

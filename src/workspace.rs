@@ -110,9 +110,15 @@ pub struct CardData {
     pub color_g: u8,
     pub color_b: u8,
     pub color_a: u8,
-    /// Card type: "Text" or "Markdown". Defaults to "Text" when missing (old files).
+    /// Card type: "Text", "Markdown", or "Image". Defaults to "Text" when missing (old files).
     #[serde(default = "default_card_type")]
     pub card_type: String,
+    /// Raw image bytes — only present for Image cards. Stored as MessagePack bin (no base64).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_data: Option<Vec<u8>>,
+    /// True when image_data is an SVG document.
+    #[serde(default)]
+    pub image_is_svg: bool,
 }
 
 fn default_card_type() -> String {
@@ -138,6 +144,8 @@ impl CardData {
             color_b: (c.b * 255.0) as u8,
             color_a: (c.a * 255.0) as u8,
             card_type: card.card_type.as_str().to_string(),
+            image_data:   card.image_data.as_ref().map(|arc| arc.as_ref().clone()),
+            image_is_svg: card.image_is_svg,
         }
     }
 

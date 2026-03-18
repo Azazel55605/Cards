@@ -25,8 +25,9 @@ pub const GHOST_TOP_BAR_H: f32 = 30.0;
 
 const ICON_TYPE_TEXT:     &[u8] = include_bytes!("icons/type-text.svg");
 const ICON_TYPE_MARKDOWN: &[u8] = include_bytes!("icons/type-markdown.svg");
+const ICON_TYPE_IMAGE:    &[u8] = include_bytes!("icons/type-image.svg");
 
-const TILES: &[CardType] = &[CardType::Text, CardType::Markdown];
+const TILES: &[CardType] = &[CardType::Text, CardType::Markdown, CardType::Image];
 
 fn pill_w() -> f32 {
     let inner: f32 = (TILES.len() as f32) * BTN_SIZE + (TILES.len() - 1) as f32 * SPACING;
@@ -195,6 +196,7 @@ impl<Message: Clone + 'static> Widget<Message, iced::Theme, iced::Renderer> for 
                 let icon_data: &[u8] = match card_type {
                     CardType::Text     => ICON_TYPE_TEXT,
                     CardType::Markdown => ICON_TYPE_MARKDOWN,
+                    CardType::Image    => ICON_TYPE_IMAGE,
                 };
                 let handle  = SvgHandle::from_memory(icon_data.to_vec());
                 let icon_sz = 18.0_f32;
@@ -239,6 +241,7 @@ impl<Message: Clone + 'static> Widget<Message, iced::Theme, iced::Renderer> for 
                 let icon_data: &[u8] = match card_type {
                     CardType::Text     => ICON_TYPE_TEXT,
                     CardType::Markdown => ICON_TYPE_MARKDOWN,
+                    CardType::Image    => ICON_TYPE_IMAGE,
                 };
                 let handle = SvgHandle::from_memory(icon_data.to_vec());
                 renderer.draw_svg(

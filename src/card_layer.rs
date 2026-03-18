@@ -16,6 +16,7 @@ use crate::icon_util;
 
 const ICON_TYPE_TEXT:     &[u8] = include_bytes!("icons/type-text.svg");
 const ICON_TYPE_MARKDOWN: &[u8] = include_bytes!("icons/type-markdown.svg");
+const ICON_TYPE_IMAGE:    &[u8] = include_bytes!("icons/type-image.svg");
 
 pub struct CardLayer<'a> {
     cards:                &'a [Card],
@@ -136,54 +137,83 @@ impl<'a> CardLayer<'a> {
             let type_data: &[u8] = match card.card_type {
                 CardType::Text     => ICON_TYPE_TEXT,
                 CardType::Markdown => ICON_TYPE_MARKDOWN,
+                CardType::Image    => ICON_TYPE_IMAGE,
             };
             let right_handle = SvgHandle::from_memory(type_data);
             frame.draw_svg(right_bounds, SvgDrawable::new(right_handle).color(card.color));
         }
 
-        // Content
-        let content_text = card.content.text();
-        if card.is_editing {
-            let editor_bounds = Rectangle {
-                x: card_rect.x,
-                y: card_rect.y + top_bar_height,
-                width: card_rect.width,
-                height: card_rect.height - top_bar_height,
-            };
-            let cursor_color    = if self.card_text.r > 0.5 { Color::WHITE } else { Color::BLACK };
-            let selection_color = Color { a: 0.28, ..self.accent_color };
-            card.content.render(frame, editor_bounds, self.card_text, cursor_color, selection_color);
-        } else if !content_text.is_empty() {
-            let text_x      = card_rect.x + 10.0;
-            let text_y      = card_rect.y + top_bar_height + 10.0;
-            let max_width   = card_rect.width - 20.0;
-            let max_height  = card_rect.height - top_bar_height - 20.0;
+        // Content (skip text rendering for Image cards — image is drawn by the renderer)
+        if card.card_type != CardType::Image {
+            let content_text = card.content.text();
+            if card.is_editing {
+                let editor_bounds = Rectangle {
+                    x: card_rect.x,
+                    y: card_rect.y + top_bar_height,
+                    width: card_rect.width,
+                    height: card_rect.height - top_bar_height,
+                };
+                let cursor_color    = if self.card_text.r > 0.5 { Color::WHITE } else { Color::BLACK };
+                let selection_color = Color { a: 0.28, ..self.accent_color };
+                card.content.render(frame, editor_bounds, self.card_text, cursor_color, selection_color);
+            } else if !content_text.is_empty() {
+                let text_x      = card_rect.x + 10.0;
+                let text_y      = card_rect.y + top_bar_height + 10.0;
+                let max_width   = card_rect.width - 20.0;
+                let max_height  = card_rect.height - top_bar_height - 20.0;
 
-            match card.card_type {
-                CardType::Markdown => {
-                    let code_bg   = Color { a: 0.12, ..self.card_text };
-                    let mut md_rr = MarkdownRenderer::with_fonts_size_height_and_link(
-                        self.card_text, max_width, max_height, self.font, self.font_size, card.color,
-                    );
-                    md_rr.set_code_bg(code_bg);
-                    let _ = md_rr.render_as_markdown(frame, &content_text, Point::new(text_x, text_y));
-                }
-                CardType::Text => {
-                    use crate::text_document::{TextDocument, TextLine, TextStyle};
-                    use crate::text_renderer::TextRenderer;
-                    let default_style = TextStyle::with_base_size(self.font_size);
-                    let mut doc = TextDocument::new();
-                    for line in content_text.lines() {
-                        let mut text_line = TextLine::new();
-                        text_line.add_segment(line.to_string(), default_style);
-                        doc.add_line(text_line);
+                match card.card_type {
+                    CardType::Markdown => {
+                        let code_bg   = Color { a: 0.12, ..self.card_text };
+                        let mut md_rr = MarkdownRenderer::with_fonts_size_height_and_link(
+                            self.card_text, max_width, max_height, self.font, self.font_size, card.color,
+                        );
+                        md_rr.set_code_bg(code_bg);
+                        let _ = md_rr.render_as_markdown(frame, &content_text, Point::new(text_x, text_y));
                     }
-                    let tr = TextRenderer::with_fonts_and_height(
-                        self.card_text, max_width, max_height, self.font, self.font,
-                    );
-                    let _ = tr.render(frame, &doc, Point::new(text_x, text_y));
+                    CardType::Text => {
+                        use crate::text_document::{TextDocument, TextLine, TextStyle};
+                        use crate::text_renderer::TextRenderer;
+                        let default_style = TextStyle::with_base_size(self.font_size);
+                        let mut doc = TextDocument::new();
+                        for line in content_text.lines() {
+                            let mut text_line = TextLine::new();
+                            text_line.add_segment(line.to_string(), default_style);
+                            doc.add_line(text_line);
+                        }
+                        let tr = TextRenderer::with_fonts_and_height(
+                            self.card_text, max_width, max_height, self.font, self.font,
+                        );
+                        let _ = tr.render(frame, &doc, Point::new(text_x, text_y));
+                    }
+                    CardType::Image => unreachable!(),
                 }
             }
+        } else if card.image_handle.is_none() {
+            // Empty image card — draw "click to add image" placeholder
+            let cx = card_rect.x + card_rect.width  / 2.0;
+            let cy = card_rect.y + top_bar_height + (card_rect.height - top_bar_height) / 2.0;
+            let ph_w = 48.0_f32;
+            let ph_h = 40.0_f32;
+            let ph_x = cx - ph_w / 2.0;
+            let ph_y = cy - ph_h / 2.0 - 10.0;
+            let placeholder_icon = SvgHandle::from_memory(ICON_TYPE_IMAGE);
+            let placeholder_col  = Color { a: 0.25, ..self.card_text };
+            frame.draw_svg(
+                Rectangle { x: ph_x, y: ph_y, width: ph_w, height: ph_h },
+                SvgDrawable::new(placeholder_icon).color(placeholder_col),
+            );
+            let label_col = Color { a: 0.35, ..self.card_text };
+            frame.fill_text(iced::widget::canvas::Text {
+                content: "Click to add image".to_string(),
+                position: Point::new(cx, cy + ph_h / 2.0 - 4.0),
+                color: label_col,
+                size: iced::Pixels(12.0),
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment:   iced::alignment::Vertical::Top,
+                font: self.font,
+                ..Default::default()
+            });
         }
 
         // Selection / editing border
@@ -273,6 +303,36 @@ impl<'a, Message> Widget<Message, iced::Theme, iced::Renderer> for CardLayer<'a>
                 let mut frame = Frame::new(&*renderer, bounds.size());
                 self.draw_card(&mut frame, card);
                 GeoRenderer::draw_geometry(renderer, frame.into_geometry());
+
+                // Draw image content for Image cards (must be after geometry flush)
+                if card.card_type == CardType::Image {
+                    let screen_x = card.current_position.x + self.offset.x;
+                    let screen_y = card.current_position.y + self.offset.y;
+                    let pad = 6.0_f32;
+                    let content_rect = Rectangle {
+                        x:      bounds.x + screen_x + pad,
+                        y:      bounds.y + screen_y + 30.0 + pad,
+                        width:  card.width  - pad * 2.0,
+                        height: card.height - 30.0 - pad * 2.0,
+                    };
+                    match &card.image_handle {
+                        Some(crate::card::CardImageHandle::Raster(handle)) => {
+                            use iced::advanced::image::{Renderer as ImgRenderer, Image};
+                            let nat = ImgRenderer::measure_image(renderer, handle);
+                            let fit = contain_rect(content_rect,
+                                Size::new(nat.width as f32, nat.height as f32));
+                            ImgRenderer::draw_image(renderer, Image::new(handle.clone()), fit);
+                        }
+                        Some(crate::card::CardImageHandle::Svg(handle)) => {
+                            use iced::advanced::svg::{Renderer as SvgRenderer, Svg};
+                            let nat = SvgRenderer::measure_svg(renderer, handle);
+                            let fit = contain_rect(content_rect,
+                                Size::new(nat.width as f32, nat.height as f32));
+                            SvgRenderer::draw_svg(renderer, Svg::new(handle.clone()), fit);
+                        }
+                        None => {}
+                    }
+                }
             });
         }
 
@@ -543,6 +603,23 @@ fn rounded_rectangle(rect: Rectangle, radius: f32) -> Path {
 }
 
 /// Rounded rectangle with rounded top corners only (for the top bar).
+/// Scale `natural_size` to fit inside `container` preserving aspect ratio (letterbox/pillarbox).
+fn contain_rect(container: Rectangle, natural_size: Size) -> Rectangle {
+    if natural_size.width <= 0.0 || natural_size.height <= 0.0 {
+        return container;
+    }
+    let scale = (container.width / natural_size.width)
+        .min(container.height / natural_size.height);
+    let w = natural_size.width  * scale;
+    let h = natural_size.height * scale;
+    Rectangle {
+        x:      container.x + (container.width  - w) / 2.0,
+        y:      container.y + (container.height - h) / 2.0,
+        width:  w,
+        height: h,
+    }
+}
+
 fn rounded_rectangle_top(rect: Rectangle, radius: f32) -> Path {
     let mut builder = Builder::new();
     let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
