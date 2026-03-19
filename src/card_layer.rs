@@ -171,7 +171,35 @@ impl<'a> CardLayer<'a> {
             let right_handle = SvgHandle::from_memory(type_data);
             frame.draw_svg(right_bounds, SvgDrawable::new(right_handle).color(card.color));
             let _ = pin_offset;
+
+            // Collapse chevron button
+            {
+                let cx = screen_x + card.width - 42.0;
+                let cy = screen_y + 15.0;
+                let s = 5.0_f32;
+                let chevron = if card.collapsed {
+                    // right-pointing (▶)
+                    Path::new(|b| {
+                        b.move_to(Point::new(cx - s * 0.5, cy - s));
+                        b.line_to(Point::new(cx + s * 0.5, cy));
+                        b.line_to(Point::new(cx - s * 0.5, cy + s));
+                        b.close();
+                    })
+                } else {
+                    // down-pointing (▼)
+                    Path::new(|b| {
+                        b.move_to(Point::new(cx - s, cy - s * 0.5));
+                        b.line_to(Point::new(cx + s, cy - s * 0.5));
+                        b.line_to(Point::new(cx, cy + s * 0.5));
+                        b.close();
+                    })
+                };
+                frame.fill(&chevron, Color { a: 0.55, ..self.card_text });
+            }
         }
+
+        // Content (skip when collapsed)
+        if !card.collapsed {
 
         // Content (skip text rendering for Image cards — image is drawn by the renderer)
         if card.card_type != CardType::Image {
@@ -246,6 +274,8 @@ impl<'a> CardLayer<'a> {
             });
         }
 
+        } // end if !card.collapsed (content area)
+
         // Selection / editing border
         if card.is_editing {
             frame.stroke(
@@ -259,8 +289,8 @@ impl<'a> CardLayer<'a> {
             );
         }
 
-        // Resize handle (show when editing or hovered)
-        if card.is_editing || self.hovered_card == Some(card.id) {
+        // Resize handle (show when editing or hovered, but not when collapsed)
+        if !card.collapsed && (card.is_editing || self.hovered_card == Some(card.id)) {
             let handle_size = 16.0;
             let handle_x    = card_rect.x + card_rect.width  - handle_size;
             let handle_y    = card_rect.y + card_rect.height - handle_size;
@@ -391,7 +421,7 @@ impl<'a, Message> Widget<Message, iced::Theme, iced::Renderer> for CardLayer<'a>
 
                 // Draw image content for Image cards (must be after geometry flush).
                 // Image renderer uses absolute screen coordinates, so apply zoom manually.
-                if card.card_type == CardType::Image {
+                if card.card_type == CardType::Image && !card.collapsed {
                     let screen_x = card.current_position.x + self.offset.x;
                     let screen_y = card.current_position.y + self.offset.y;
                     let pad = 6.0_f32;

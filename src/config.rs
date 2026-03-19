@@ -72,6 +72,10 @@ pub struct GeneralConfig {
     /// Up to 5 most recently opened workspace paths (most recent first)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_workspaces: Vec<String>,
+
+    /// Whether to show the minimap overlay. Defaults to true.
+    #[serde(default = "default_true")]
+    pub show_minimap: bool,
 }
 
 fn default_false() -> bool {
@@ -241,6 +245,7 @@ impl Default for GeneralConfig {
             confirm_card_delete: default_true(),
             last_workspace: None,
             recent_workspaces: Vec::new(),
+            show_minimap: default_true(),
         }
     }
 }
@@ -427,6 +432,11 @@ impl Config {
 
     pub fn set_confirm_card_delete(&mut self, enabled: bool) -> Result<(), ConfigError> {
         self.general.confirm_card_delete = enabled;
+        self.save()
+    }
+
+    pub fn set_show_minimap(&mut self, show: bool) -> Result<(), ConfigError> {
+        self.general.show_minimap = show;
         self.save()
     }
 

@@ -96,6 +96,8 @@ pub struct DotGrid {
     /// Key: (from_card, from_side, to_card, to_side) → (from_perp, to_perp).
     /// Updated each tick so connection bundle lines animate smoothly when slots reorder.
     conn_slot_anim: HashMap<(usize, CardSide, usize, CardSide), (f32, f32)>,
+    /// Flag to cancel the current drag (set via Cell so it works from &self)
+    cancel_drag_flag: Cell<bool>,
 }
 
 impl DotGrid {
@@ -135,6 +137,7 @@ impl DotGrid {
             zoom: 1.0,
             viewport_center: Cell::new(Point::ORIGIN),
             conn_slot_anim: HashMap::new(),
+            cancel_drag_flag: Cell::new(false),
         }
     }
 
@@ -412,7 +415,30 @@ impl DotGrid {
             self.card_caches.remove(pos);
         }
         self.connections.retain(|c| c.from_card != card_id && c.to_card != card_id);
+        self.conn_slot_anim.retain(|k, _| k.0 != card_id && k.2 != card_id);
     }
+
+    pub fn toggle_card_collapse(&mut self, card_id: usize, animated: bool) {
+        if let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) {
+            card.toggle_collapse(animated);
+            self.clear_all_card_caches();
+        }
+    }
+
+    pub fn remove_card(&mut self, card_id: usize) -> Option<crate::card::Card> {
+        if let Some(pos) = self.cards.iter().position(|c| c.id == card_id) {
+            if pos < self.card_caches.len() {
+                self.card_caches.remove(pos);
+            }
+            self.connections.retain(|c| c.from_card != card_id && c.to_card != card_id);
+            self.conn_slot_anim.retain(|k, _| k.0 != card_id && k.2 != card_id);
+            Some(self.cards.remove(pos))
+        } else {
+            None
+        }
+    }
+
+    pub fn cancel_drag(&self) { self.cancel_drag_flag.set(true); }
 
     pub fn connections(&self) -> &[Connection] { &self.connections }
     pub fn connections_mut(&mut self) -> &mut Vec<Connection> { &mut self.connections }
@@ -991,6 +1017,7 @@ pub enum DotGridMessage {
     ConnectionCancel,
     DeleteConnection { from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide },
     ConnectionClick { from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide },
+    CardCollapseToggle(usize),
 }
 
 impl Program<DotGridMessage> for &DotGrid {
@@ -1003,6 +1030,13 @@ impl Program<DotGridMessage> for &DotGrid {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (iced::widget::canvas::event::Status, Option<DotGridMessage>) {
+        // Cancel drag if requested externally (e.g. board transfer)
+        if self.cancel_drag_flag.get() {
+            state.dragging_card = None;
+            state.drag_offset = None;
+            self.cancel_drag_flag.set(false);
+        }
+
         // All input is blocked while a modal is open
         if self.blocked {
             state.is_panning = false;
@@ -1104,10 +1138,23 @@ impl Program<DotGridMessage> for &DotGrid {
                                             height: 20.0,
                                         };
 
+                                        // Collapse button — between drag area and type icon
+                                        let collapse_btn_bounds = Rectangle {
+                                            x: screen_bounds.x + screen_bounds.width - 50.0,
+                                            y: screen_bounds.y + 5.0,
+                                            width: 20.0,
+                                            height: 20.0,
+                                        };
+
                                         if type_icon_bounds.contains(pos) {
                                             return (
                                                 iced::widget::canvas::event::Status::Captured,
                                                 Some(DotGridMessage::CardTypeIconClick(card.id)),
+                                            );
+                                        } else if collapse_btn_bounds.contains(pos) {
+                                            return (
+                                                iced::widget::canvas::event::Status::Captured,
+                                                Some(DotGridMessage::CardCollapseToggle(card.id)),
                                             );
                                         } else if icon_bounds.contains(pos) {
                                             // Left icon left-click → open icon/colour picker
@@ -1139,7 +1186,7 @@ impl Program<DotGridMessage> for &DotGrid {
                                             height: handle_size,
                                         };
 
-                                        if resize_handle_bounds.contains(pos) {
+                                        if resize_handle_bounds.contains(pos) && !card.collapsed {
                                             state.resizing_card = Some(card.id);
                                             state.resize_start_size = Some((card.width, card.height));
                                             state.resize_start_pos = Some(pos);
@@ -1744,6 +1791,17 @@ impl Program<DotGridMessage> for &DotGrid {
                         height: 20.0,
                     };
                     if type_icon_bounds.contains(pos) {
+                        return mouse::Interaction::Pointer;
+                    }
+
+                    // Collapse chevron button — pointer
+                    let collapse_btn_bounds = Rectangle {
+                        x: screen_bounds.x + screen_bounds.width - 50.0,
+                        y: screen_bounds.y + 5.0,
+                        width: 20.0,
+                        height: 20.0,
+                    };
+                    if collapse_btn_bounds.contains(pos) {
                         return mouse::Interaction::Pointer;
                     }
 

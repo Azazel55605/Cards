@@ -174,6 +174,8 @@ pub struct Card {
     pub color: Color,
     pub card_type: CardType,
     pub pinned: bool,
+    pub collapsed: bool,
+    pub natural_height: f32,
     pub is_dragging: bool,
     pub content: CustomTextEditor,
     pub is_editing: bool,
@@ -199,6 +201,8 @@ impl Clone for Card {
             color: self.color,
             card_type: self.card_type,
             pinned: self.pinned,
+            collapsed: self.collapsed,
+            natural_height: self.natural_height,
             is_dragging: self.is_dragging,
             content: self.content.clone(),
             is_editing: self.is_editing,
@@ -699,6 +703,8 @@ impl Card {
             color: Color::from_rgb8(124, 92, 252), // Default purple (matches app accent)
             card_type: CardType::Text,
             pinned: false,
+            collapsed: false,
+            natural_height: Self::MIN_HEIGHT,
             is_dragging: false,
             content: CustomTextEditor::new(),
             is_editing: false,
@@ -707,6 +713,20 @@ impl Card {
             image_data:   None,
             image_is_svg: false,
             image_handle: None,
+        }
+    }
+
+    pub fn toggle_collapse(&mut self, animated: bool) {
+        if self.collapsed {
+            self.collapsed = false;
+            self.target_height = self.natural_height;
+            if !animated { self.height = self.natural_height; }
+        } else {
+            // Store the current intended expanded height before collapsing
+            self.natural_height = self.target_height.max(self.height);
+            self.collapsed = true;
+            self.target_height = 30.0;
+            if !animated { self.height = 30.0; }
         }
     }
 

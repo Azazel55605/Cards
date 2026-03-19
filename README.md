@@ -14,17 +14,18 @@ Cards is a modern, infinite-canvas note-taking application that lets you organis
 ### Key Features
 
 - 🎨 **Infinite Canvas** — Unlimited space across a smooth dot grid with zoom (40%–500%) and pan
-- 📋 **Multiple Boards** — Separate canvases per board with independent cards; switch instantly
+- 📋 **Multiple Boards** — Separate canvases per board with independent cards; switch instantly; drag cards between boards
 - 📝 **Markdown Support** — Full markdown rendering inside `<md>` tags with 40+ language syntax highlighting
-- 🎯 **Smart Cards** — Resizable, colour-coded cards with 80+ Bootstrap icons
+- 🎯 **Smart Cards** — Resizable, collapsible, colour-coded cards with 80+ Bootstrap icons
 - 🖼️ **Image Cards** — Embed raster images (PNG/JPEG/GIF/BMP/WebP) or SVG files directly on the canvas
+- 🗺️ **Minimap** — Overview overlay in the top-right corner; click or drag to pan; toggle with `M`
 - ⚡ **Fast & Native** — Built entirely in Rust for maximum responsiveness
 - 🌓 **Dark / Light Theme** — Smooth animated diagonal-wipe transition between themes
 - 🎨 **Accent Colours** — Choose your accent colour; applied to borders, highlights, gradients, and the sidebar
 - 🔤 **Rich Text Editor** — Custom monospace editor with cursor, selection, word navigation, and system clipboard
 - 🔲 **Interactive Checkboxes** — Click to toggle checkboxes directly in the rendered card view
 - 💾 **Per-Board Auto-Save** — Cards saved per board automatically every 30 seconds
-- 🎬 **Smooth Animations** — Card move/resize, board transitions, settings open/close, theme wipe
+- 🎬 **Smooth Animations** — Card move/resize, collapse, board transitions, settings open/close, theme wipe
 - ⌨️ **Keyboard-First** — Full shortcut reference available in-app under Settings → Shortcuts
 - 🛠️ **Self-Healing Config** — Missing or obsolete config keys are fixed automatically on startup
 - ✅ **Delete Confirmation** — Optional confirmation dialog before deleting a card (toggleable in settings)
@@ -91,7 +92,9 @@ cargo run --release
 | `Right-click canvas` | Context menu → Add Card |
 | `Click` | Edit card |
 | `Drag header` | Move card |
+| `Drag header to board` | Move card to another board |
 | `Drag ↘ handle` | Resize card |
+| `▶ chevron` | Collapse / expand card |
 | `Delete` | Delete selected card(s) |
 | `Ctrl + D` | Duplicate selected card(s) |
 | `Esc` | Stop editing / deselect |
@@ -160,6 +163,7 @@ cargo run --release
 
 | Shortcut | Action |
 |----------|--------|
+| `M` | Toggle minimap |
 | `Esc` | Close menus / dialogs / settings |
 
 > All shortcuts are also listed inside the app under **Settings → Shortcuts**.
@@ -244,6 +248,18 @@ Hover over or select a card — a **↘ handle** appears in the bottom-right cor
 
 Drag the **coloured header bar** at the top of any card. Cards snap to the grid on release and can be moved while selected or unselected.
 
+### Moving Cards Between Boards
+
+While dragging a card's header bar, the sidebar switches to a **"Move card to…"** panel. Drag the card over the target board name (it highlights) and release to move it there.
+
+### Collapsing Cards
+
+Click the **▶ chevron** button in the card's top bar (left of the type icon) to collapse the card to just its header bar. Click again to expand. The expanded height is remembered. Collapse is animated when animations are enabled.
+
+### Minimap
+
+A small overview of the entire canvas appears in the **top-right corner**. Click anywhere on the minimap to jump to that position; drag to pan continuously. Toggle visibility with `M` or in **Settings → General**.
+
 ### Canvas Navigation & Zoom
 
 - **Pan:** Click + drag empty space, or scroll
@@ -266,7 +282,7 @@ Drag the **coloured header bar** at the top of any card. Cards snap to the grid 
 
 | Category | Contents |
 |----------|----------|
-| **General** | Sidebar open on start, animations, new-board button position, card delete confirmation |
+| **General** | Sidebar open on start, animations, new-board button position, card delete confirmation, minimap |
 | **Appearance** | Theme, accent colour, font family, font size |
 | **Shortcuts** | Full keyboard shortcut reference (read-only) |
 | **About** | App version, config path, debug mode toggle |
@@ -315,6 +331,7 @@ Missing keys are added with defaults; obsolete keys are removed — automaticall
 | `general.enable_animations` | `true` | Enable all animations |
 | `general.new_board_button_at_top` | `false` | Place new-board button at top of list |
 | `general.confirm_card_delete` | `true` | Confirmation dialog before deleting a card |
+| `general.show_minimap` | `true` | Show minimap overlay (toggle with `M`) |
 | `general.debug_mode` | `false` | Print debug output to the console |
 | `appearance.theme` | `light` | `light` or `dark` |
 | `appearance.accent_color` | `purple` | Accent colour (`purple`, `blue`, `red`, `green`, `orange`, `pink`, `cyan`, `yellow`, `gray`, `coral`) |
@@ -339,6 +356,9 @@ Missing keys are added with defaults; obsolete keys are removed — automaticall
 12. **Board delete button:** Hover a board in the sidebar to reveal the red delete button
 13. **Multi-select:** Drag across empty canvas space to box-select, then move or delete all at once
 14. **Duplicate shortcut:** `Ctrl + D` duplicates the selected card(s), preserving size and colour
+15. **Collapse clutter:** Click the ▶ chevron on busy cards to fold them to header-only view
+16. **Minimap navigation:** Click or drag the minimap to pan without scrolling across the canvas
+17. **Move across boards:** Drag a card's header toward the sidebar to reveal the board drop zone
 
 ---
 

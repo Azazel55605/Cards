@@ -122,10 +122,20 @@ pub struct CardData {
     /// Whether the card is pinned (cannot be moved). Defaults to false for old files.
     #[serde(default)]
     pub pinned: bool,
+    /// Whether the card is collapsed (content hidden). Defaults to false for old files.
+    #[serde(default)]
+    pub collapsed: bool,
+    /// The expanded height to restore when uncollapsing. Defaults to 150.0 for old files.
+    #[serde(default = "default_natural_height")]
+    pub natural_height: f32,
 }
 
 fn default_card_type() -> String {
     "Text".to_string()
+}
+
+fn default_natural_height() -> f32 {
+    150.0
 }
 
 // ── Conversion helpers ──────────────────────────────────────────────────────
@@ -150,6 +160,8 @@ impl CardData {
             image_data:   card.image_data.as_ref().map(|arc| arc.as_ref().clone()),
             image_is_svg: card.image_is_svg,
             pinned: card.pinned,
+            collapsed: card.collapsed,
+            natural_height: card.natural_height,
         }
     }
 

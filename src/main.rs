@@ -29,6 +29,7 @@ mod file_picker;
 mod import_export;
 mod import_export_modal;
 mod zoom_bar;
+mod minimap_overlay;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -58,6 +59,7 @@ use card_toolbar::{CardToolbar, ToolbarItem};
 use card_layer::CardLayer;
 use card_shelf::{CardShelf, SHELF_HEIGHT, GHOST_CARD_W, GHOST_TOP_BAR_H};
 use zoom_bar::ZoomBar;
+use minimap_overlay::{MinimapOverlay, MinimapCard, MinimapConn};
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -297,6 +299,14 @@ pub enum Message {
     ZoomOut,
     ZoomReset,
     MenuViewResetZoom,
+    // Card collapse
+    ToggleCardCollapse(usize),
+    // Minimap
+    ToggleMinimap,
+    MinimapPan(Vector),
+    // Board drag-drop
+    DragBoardHover(Option<usize>),
+    MoveDraggedCardToBoard(usize),
 }
 
 struct Cards {
@@ -414,6 +424,9 @@ struct Cards {
     import_export_submenu_open: bool,
     // Shelf drag state
     shelf_drag: Option<CardType>,
+    // Board drag-drop
+    card_drag_in_progress: Option<usize>,
+    drag_target_board: Option<usize>,
 }
 
 const SIDEBAR_HIDDEN_OFFSET: f32 = -280.0;
@@ -557,6 +570,8 @@ impl Cards {
             import_export_modal: None,
             import_export_submenu_open: false,
             shelf_drag: None,
+            card_drag_in_progress: None,
+            drag_target_board: None,
         };
         cards.update_exclude_region();
 
@@ -985,6 +1000,8 @@ impl Cards {
                         }
                     }
                     DotGridMessage::CardLeftClickBar(card_id, _pos) => {
+                        // Track this card as being dragged for board drop detection
+                        self.card_drag_in_progress = Some(card_id);
                         // Start dragging — stop editing but keep (or set) selection
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             if !card.pinned {
@@ -1194,6 +1211,27 @@ impl Cards {
                         self.workspace_dirty = true;
                     }
                     DotGridMessage::CardDrop(card_id) => {
+                        // Check if dropped onto a board target
+                        if let Some(target_board) = self.drag_target_board.take() {
+                            if target_board != self.active_board_index {
+                                let card_to_move = self.dot_grid.remove_card(card_id);
+                                if let Some(mut card) = card_to_move {
+                                    card.is_dragging = false;
+                                    let snapped = crate::card::Card::snap_to_grid(card.current_position, self.dot_grid.dot_spacing());
+                                    card.current_position = snapped;
+                                    card.target_position = snapped;
+                                    self.board_cards.entry(target_board).or_default().push(card);
+                                    self.dot_grid.clear_cards_cache();
+                                    self.dot_grid.cancel_drag();
+                                    self.workspace_dirty = true;
+                                    self.card_drag_in_progress = None;
+                                    return Task::none();
+                                }
+                            }
+                            self.drag_target_board = None;
+                        }
+                        self.card_drag_in_progress = None;
+
                         let dot_spacing = self.dot_grid.dot_spacing();
                         self.last_drag_world_pos = None;
                         if self.selected_card_ids.contains(&card_id) && self.selected_card_ids.len() > 1 {
@@ -1329,6 +1367,10 @@ impl Cards {
                     DotGridMessage::ConnectionCancel => {
                         self.dot_grid.clear_cards_cache();
                     }
+                    DotGridMessage::CardCollapseToggle(card_id) => {
+                        self.dot_grid.toggle_card_collapse(card_id, self.config.general.enable_animations);
+                        self.workspace_dirty = true;
+                    }
                     DotGridMessage::CardTextDrag(card_id, drag_pos) => {
                         // Get canvas offset first (before borrowing cards_mut)
                         let canvas_offset = self.dot_grid.offset();
@@ -1359,6 +1401,37 @@ impl Cards {
                     }
                     Event::Mouse(mouse::Event::CursorMoved { position }) => {
                         self.mouse_position = Some(position);
+                        // Board hover detection during card drag
+                        if self.card_drag_in_progress.is_some() {
+                            let sidebar_left = 15.0 + self.sidebar_offset;
+                            let sidebar_right = sidebar_left + SIDEBAR_WIDTH;
+                            let other_boards: Vec<usize> = (0..self.boards.len())
+                                .filter(|&i| i != self.active_board_index)
+                                .collect();
+                            if !other_boards.is_empty()
+                                && position.x >= sidebar_left
+                                && position.x <= sidebar_right
+                            {
+                                // Drop zone spans the middle of the sidebar:
+                                // top_row (~60px) + top_separator + label header (~28px) = ~90px
+                                // toggle button + separator at bottom = ~65px
+                                let zone_top = 90.0_f32;
+                                let zone_bottom = self.window_size.height - 65.0;
+                                let zone_h = (zone_bottom - zone_top).max(1.0);
+                                let slot_h = zone_h / other_boards.len() as f32;
+                                let y_rel = position.y - zone_top;
+                                let slot_idx = (y_rel / slot_h).floor() as isize;
+                                self.drag_target_board = if slot_idx >= 0
+                                    && (slot_idx as usize) < other_boards.len()
+                                {
+                                    other_boards.get(slot_idx as usize).copied()
+                                } else {
+                                    None
+                                };
+                            } else {
+                                self.drag_target_board = None;
+                            }
+                        }
                     }
                     Event::Window(iced::window::Event::Resized(size)) => {
                         self.window_size = size;
@@ -1378,6 +1451,26 @@ impl Cards {
                         }
                     }
                     Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                        // Handle board drag-drop on release
+                        if self.card_drag_in_progress.is_some() {
+                            if let Some(target_board) = self.drag_target_board.take() {
+                                if target_board != self.active_board_index {
+                                    if let Some(card_id) = self.card_drag_in_progress.take() {
+                                        let card_to_move = self.dot_grid.remove_card(card_id);
+                                        if let Some(mut card) = card_to_move {
+                                            card.is_dragging = false;
+                                            self.board_cards.entry(target_board).or_default().push(card);
+                                            self.dot_grid.clear_cards_cache();
+                                            self.dot_grid.cancel_drag();
+                                            self.workspace_dirty = true;
+                                        }
+                                    }
+                                }
+                            }
+                            self.card_drag_in_progress = None;
+                            self.drag_target_board = None;
+                        }
+
                         if let Some(card_type) = self.shelf_drag.take() {
                             if let Some(pos) = self.mouse_position {
                                 let shelf_top = self.window_size.height - SHELF_HEIGHT;
@@ -1641,6 +1734,13 @@ impl Cards {
 
                     // Global shortcuts when NOT editing a card
                     if self.editing_card_id.is_none() {
+                        // M: Toggle minimap
+                        if !modifiers.control() && !modifiers.shift() && !modifiers.alt()
+                            && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "m")
+                        {
+                            return Task::done(Message::ToggleMinimap);
+                        }
+
                         // N: Add a new card at the mouse position (or viewport centre as fallback)
                         if !modifiers.control() && !modifiers.shift() && !modifiers.alt()
                             && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "n")
@@ -2823,6 +2923,39 @@ impl Cards {
                 self.dot_grid.set_zoom(self.canvas_zoom);
                 self.canvas_position_dirty = true;
             }
+            Message::ToggleCardCollapse(card_id) => {
+                self.dot_grid.toggle_card_collapse(card_id, self.config.general.enable_animations);
+                self.workspace_dirty = true;
+            }
+            Message::ToggleMinimap => {
+                self.config.general.show_minimap = !self.config.general.show_minimap;
+                let _ = self.config.set_show_minimap(self.config.general.show_minimap);
+            }
+            Message::MinimapPan(delta) => {
+                self.canvas_offset.x += delta.x;
+                self.canvas_offset.y += delta.y;
+                self.dot_grid.set_offset(self.canvas_offset);
+                self.canvas_position_dirty = true;
+            }
+            Message::DragBoardHover(board_idx) => {
+                self.drag_target_board = board_idx;
+            }
+            Message::MoveDraggedCardToBoard(target_board) => {
+                if target_board != self.active_board_index {
+                    if let Some(card_id) = self.card_drag_in_progress.take() {
+                        let card_to_move = self.dot_grid.remove_card(card_id);
+                        if let Some(mut card) = card_to_move {
+                            card.is_dragging = false;
+                            self.board_cards.entry(target_board).or_default().push(card);
+                            self.dot_grid.clear_cards_cache();
+                            self.dot_grid.cancel_drag();
+                            self.workspace_dirty = true;
+                        }
+                    }
+                }
+                self.card_drag_in_progress = None;
+                self.drag_target_board = None;
+            }
         }
 
         // Persist any state-changing action immediately
@@ -3117,10 +3250,12 @@ impl Cards {
                 card.color = cd.to_color();
                 card.card_type = cd.to_card_type();
                 card.pinned = cd.pinned;
+                card.collapsed = cd.collapsed;
+                card.natural_height = cd.natural_height;
                 card.width = cd.width;
-                card.height = cd.height;
+                card.height = if cd.collapsed { 30.0 } else { cd.height };
                 card.target_width = cd.width;
-                card.target_height = cd.height;
+                card.target_height = if cd.collapsed { 30.0 } else { cd.height };
                 card.target_position = card.current_position;
                 // Restore image data and rebuild the cached render handle
                 if let Some(img_bytes) = cd.image_data.clone() {
@@ -4374,6 +4509,71 @@ impl Cards {
             boards_section.into()
         };
 
+        // Board drag-drop zone — shown when a card is being dragged
+        let boards_or_drop_zone: Element<Message> = if self.card_drag_in_progress.is_some() {
+            let drag_card_id = self.card_drag_in_progress.unwrap();
+            let drop_zone_bg = Color::from_rgba(
+                self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.08,
+            );
+            let drop_btn_style_base = CardButtonStyle {
+                background: drop_zone_bg,
+                background_hovered: Color::from_rgba(
+                    self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.25,
+                ),
+                text_color: self.theme.button_text(),
+                border_color: Color::from_rgba(
+                    self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.4,
+                ),
+                shadow_color: Color::TRANSPARENT,
+            };
+            let mut drop_col = column![
+                container(text("Move card to...").size(12).color(Color::from_rgba(
+                    self.theme.button_text().r, self.theme.button_text().g, self.theme.button_text().b, 0.6
+                )))
+                .padding(Padding { top: 8.0, right: 10.0, bottom: 4.0, left: 10.0 }),
+            ].spacing(4).width(Length::Fill);
+            for (i, board_name) in self.boards.iter().enumerate() {
+                if i != self.active_board_index {
+                    let is_hovered = self.drag_target_board == Some(i);
+                    let btn_style = if is_hovered {
+                        CardButtonStyle {
+                            background: Color::from_rgba(
+                                self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.35,
+                            ),
+                            background_hovered: Color::from_rgba(
+                                self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.35,
+                            ),
+                            text_color: self.theme.button_text(),
+                            border_color: Color::from_rgba(
+                                self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.7,
+                            ),
+                            shadow_color: Color::TRANSPARENT,
+                        }
+                    } else {
+                        drop_btn_style_base.clone()
+                    };
+                    let btn = button(
+                        container(text(board_name.clone()).size(13))
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .align_x(Alignment::Start)
+                            .align_y(Alignment::Center)
+                            .padding(Padding { top: 0.0, right: 10.0, bottom: 0.0, left: 10.0 })
+                    )
+                    .height(36)
+                    .width(Length::Fill)
+                    .class(btn_style)
+                    .on_press(Message::MoveDraggedCardToBoard(i));
+                    drop_col = drop_col.push(btn);
+                }
+            }
+            scrollable(container(drop_col).width(Length::Fill).padding(Padding { top: 5.0, right: 10.0, bottom: 5.0, left: 10.0 }))
+                .height(Length::Fill)
+                .into()
+        } else {
+            boards_with_animation
+        };
+
         let sidebar_content = column![
             container(top_row)
                 .width(Length::Fill)
@@ -4386,7 +4586,7 @@ impl Cards {
                     bottom: 0.0,
                     left: 20.0,
                 }),
-            boards_with_animation,
+            boards_or_drop_zone,
             container(separator)
                 .width(Length::Fill)
                 .padding(Padding {
@@ -4446,8 +4646,36 @@ impl Cards {
         .into();
 
         // IMPORTANT: Add sidebar overlay LAST (except settings) to ensure it renders on top of all card elements
-        // The order is: base canvas -> context menu -> card menu -> toolbar -> SIDEBAR -> app menu -> settings
+        // The order is: base canvas -> context menu -> card menu -> toolbar -> SIDEBAR -> MINIMAP -> app menu -> settings
         view = Overlay::new(view, sidebar).into();
+
+        // Minimap overlay — rendered after sidebar so it's always on top.
+        if self.config.general.show_minimap {
+            let mm_cards: Vec<MinimapCard> = self.dot_grid.cards().iter().map(|c| MinimapCard {
+                pos:    c.current_position,
+                width:  c.width,
+                height: c.height,
+                color:  c.color,
+            }).collect();
+            let mm_conns: Vec<MinimapConn> = self.dot_grid.connections().iter().filter_map(|conn| {
+                let from = self.dot_grid.cards().iter().find(|c| c.id == conn.from_card)?;
+                let to   = self.dot_grid.cards().iter().find(|c| c.id == conn.to_card)?;
+                Some(MinimapConn {
+                    from: Point::new(from.current_position.x + from.width  / 2.0,
+                                     from.current_position.y + from.height / 2.0),
+                    to:   Point::new(to.current_position.x   + to.width    / 2.0,
+                                     to.current_position.y   + to.height   / 2.0),
+                })
+            }).collect();
+            let offset = self.canvas_offset;
+            let zoom   = self.canvas_zoom;
+            let wsize  = iced::Size::new(self.window_size.width, self.window_size.height);
+            let minimap: Element<Message> = MinimapOverlay::new(
+                mm_cards, mm_conns, offset, zoom, wsize,
+                |delta| Message::MinimapPan(delta),
+            ).into();
+            view = Overlay::new(view, minimap).into();
+        }
 
         // Add app menu dropdown (on top of sidebar)
         if self.app_menu_open || self.app_menu_animating {
@@ -5584,6 +5812,12 @@ impl Cards {
                     Message::SetConfirmCardDelete(!self.config.general.confirm_card_delete),
                 );
 
+                let minimap_label = text("Show minimap").size(14);
+                let minimap_btn = self.build_toggle_button(
+                    self.config.general.show_minimap,
+                    Message::ToggleMinimap,
+                );
+
                 column![
                     text("General Settings").size(16).font(iced::Font {
                         weight: iced::font::Weight::Bold,
@@ -5626,6 +5860,13 @@ impl Cards {
                             self.theme.button_text().b,
                             0.6,
                         )),
+                    Space::with_height(15),
+                    row![
+                        minimap_label,
+                        Space::with_width(Length::Fill),
+                        minimap_btn,
+                    ]
+                    .align_y(Alignment::Center),
                 ]
                 .spacing(10)
                 .into()
@@ -5898,7 +6139,9 @@ impl Cards {
                     ("Right-click canvas",    "Open context menu  \u{2192}  Add Card"),
                     ("Click",                 "Edit card"),
                     ("Drag header",           "Move card"),
+                    ("Drag header to board",  "Move card to another board"),
                     ("Drag \u{2198} handle",  "Resize card"),
+                    ("\u{25b6} chevron",      "Collapse / expand card"),
                     ("Delete",                "Delete selected card(s)"),
                     ("Ctrl + D",              "Duplicate selected card(s)"),
                     ("Esc",                   "Stop editing / deselect"),
@@ -5953,6 +6196,7 @@ impl Cards {
                     ("SEP", ""),
                     // App
                     ("SECTION", "App"),
+                    ("M",                     "Toggle minimap"),
                     ("Esc",                   "Close menus / dialogs / settings"),
                 ];
 
