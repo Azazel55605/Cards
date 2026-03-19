@@ -235,6 +235,7 @@ pub enum Message {
     FormatBullet,
     DuplicateCard(usize),
     DeleteCard(usize),
+    TogglePinCard(usize),
     // Board messages
     AddNewBoard,
     SelectBoard(usize),
@@ -373,6 +374,8 @@ struct Cards {
     icon_add: svg::Handle,
     icon_duplicate: svg::Handle,
     icon_delete: svg::Handle,
+    icon_pin: svg::Handle,
+    icon_pin_fill: svg::Handle,
     icon_app: svg::Handle,
     icon_menu: svg::Handle,
     icon_type_text: svg::Handle,
@@ -523,6 +526,8 @@ impl Cards {
             icon_add: svg::Handle::from_memory(include_bytes!("icons/add.svg")),
             icon_duplicate: svg::Handle::from_memory(include_bytes!("icons/duplicate.svg")),
             icon_delete: svg::Handle::from_memory(include_bytes!("icons/delete.svg")),
+            icon_pin:      svg::Handle::from_memory(icon_util::icon_to_svg(icondata_bs::BsPin)),
+            icon_pin_fill: svg::Handle::from_memory(icon_util::icon_to_svg(icondata_bs::BsPinFill)),
             icon_app: svg::Handle::from_memory(include_bytes!("icons/app.svg")),
             icon_menu: svg::Handle::from_memory(include_bytes!("icons/menu.svg")),
             icon_type_text: svg::Handle::from_memory(include_bytes!("icons/type-text.svg")),
@@ -978,7 +983,9 @@ impl Cards {
                     DotGridMessage::CardLeftClickBar(card_id, _pos) => {
                         // Start dragging — stop editing but keep (or set) selection
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
-                            card.is_dragging = true;
+                            if !card.pinned {
+                                card.is_dragging = true;
+                            }
                             card.is_editing = false;
                         }
                         self.editing_card_id = None;
@@ -996,9 +1003,9 @@ impl Cards {
                             self.dot_grid.clear_selected_cards();
                             // leave selected_card_id / single_selected_card unchanged
                         } else {
-                            // Mark all selected cards as dragging too
+                            // Mark all selected cards as dragging too (skip pinned ones)
                             for card in self.dot_grid.cards_mut().iter_mut() {
-                                if self.selected_card_ids.contains(&card.id) {
+                                if self.selected_card_ids.contains(&card.id) && !card.pinned {
                                     card.is_dragging = true;
                                 }
                             }
@@ -1396,7 +1403,7 @@ impl Cards {
                                 };
                                 let factor = if scroll_y > 0.0 { 1.1_f32.powf(scroll_y) } else { (1.0 / 1.1_f32).powf(-scroll_y) };
                                 let old_zoom = self.canvas_zoom;
-                                let new_zoom = (self.canvas_zoom * factor).clamp(0.05, 10.0);
+                                let new_zoom = (self.canvas_zoom * factor).clamp(0.4, 5.0);
                                 self.canvas_zoom = new_zoom;
                                 self.dot_grid.set_zoom(new_zoom);
                                 // Adjust offset so the point under the cursor stays fixed.
@@ -1542,7 +1549,7 @@ impl Cards {
                     return Task::none();
                 }
                 // Check for global shortcuts first
-                if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = &keyboard_event {
+                if let iced::keyboard::Event::KeyPressed { key, modified_key, modifiers, .. } = &keyboard_event {
                     // Ctrl+Tab to cycle forward through boards
                     if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab)) {
                         if self.boards.len() > 1 {
@@ -1596,15 +1603,16 @@ impl Cards {
                         return Task::none();
                     }
 
-                    // Ctrl+0 to recenter canvas (global, works even when not editing)
-                    if modifiers.control() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "0") {
+                    // Ctrl+0: recenter canvas + reset zoom to 100%
+                    // Uses modified_key so it works across layouts (Shift is applied, Ctrl is not)
+                    if modifiers.control() && matches!(modified_key, iced::keyboard::Key::Character(c) if c.as_str() == "0") {
+                        self.canvas_zoom = 1.0;
+                        self.dot_grid.set_zoom(self.canvas_zoom);
                         if self.config.general.enable_animations {
-                            // Start animation
                             self.canvas_animating = true;
                             self.canvas_animation_start = self.canvas_offset;
                             self.canvas_animation_progress = 0.0;
                         } else {
-                            // Instant recenter
                             self.canvas_offset = Vector::new(0.0, 0.0);
                             self.dot_grid.set_offset(self.canvas_offset);
                             self.canvas_position_dirty = true;
@@ -1612,21 +1620,16 @@ impl Cards {
                         return Task::none();
                     }
 
-                    // Ctrl+= / Ctrl++ → zoom in; Ctrl+- → zoom out; Ctrl+Shift+0 → reset zoom
-                    if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "=" || c.as_str() == "+") {
-                        self.canvas_zoom = (self.canvas_zoom * 1.25).clamp(0.05, 10.0);
+                    // Zoom in/out via modified_key: Shift is applied but Ctrl is not, so
+                    // Ctrl+Shift+= (QWERTY) and Ctrl++ (QWERTZ) both produce modified_key "+"
+                    if modifiers.control() && matches!(modified_key, iced::keyboard::Key::Character(c) if c.as_str() == "+") {
+                        self.canvas_zoom = (self.canvas_zoom * 1.25).clamp(0.4, 5.0);
                         self.dot_grid.set_zoom(self.canvas_zoom);
                         self.canvas_position_dirty = true;
                         return Task::none();
                     }
-                    if modifiers.control() && !modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "-") {
-                        self.canvas_zoom = (self.canvas_zoom / 1.25).clamp(0.05, 10.0);
-                        self.dot_grid.set_zoom(self.canvas_zoom);
-                        self.canvas_position_dirty = true;
-                        return Task::none();
-                    }
-                    if modifiers.control() && modifiers.shift() && matches!(key, iced::keyboard::Key::Character(c) if c.as_str() == "0") {
-                        self.canvas_zoom = 1.0;
+                    if modifiers.control() && matches!(modified_key, iced::keyboard::Key::Character(c) if c.as_str() == "-") {
+                        self.canvas_zoom = (self.canvas_zoom / 1.25).clamp(0.4, 5.0);
                         self.dot_grid.set_zoom(self.canvas_zoom);
                         self.canvas_position_dirty = true;
                         return Task::none();
@@ -2160,6 +2163,16 @@ impl Cards {
                     self.dot_grid.clear_cards_cache();
                     self.workspace_dirty = true;
                 }
+            }
+            Message::TogglePinCard(card_id) => {
+                if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                    card.pinned = !card.pinned;
+                    if card.pinned {
+                        card.is_dragging = false;
+                    }
+                }
+                self.dot_grid.clear_cards_cache();
+                self.workspace_dirty = true;
             }
             Message::DeleteCard(card_id) => {
                 if self.config.general.confirm_card_delete {
@@ -2792,12 +2805,12 @@ impl Cards {
                 self.image_picker = None;
             }
             Message::ZoomIn => {
-                self.canvas_zoom = (self.canvas_zoom * 1.25).clamp(0.05, 10.0);
+                self.canvas_zoom = (self.canvas_zoom * 1.25).clamp(0.4, 5.0);
                 self.dot_grid.set_zoom(self.canvas_zoom);
                 self.canvas_position_dirty = true;
             }
             Message::ZoomOut => {
-                self.canvas_zoom = (self.canvas_zoom / 1.25).clamp(0.05, 10.0);
+                self.canvas_zoom = (self.canvas_zoom / 1.25).clamp(0.4, 5.0);
                 self.dot_grid.set_zoom(self.canvas_zoom);
                 self.canvas_position_dirty = true;
             }
@@ -3099,6 +3112,7 @@ impl Cards {
                 card.icon = cd.to_icon();
                 card.color = cd.to_color();
                 card.card_type = cd.to_card_type();
+                card.pinned = cd.pinned;
                 card.width = cd.width;
                 card.height = cd.height;
                 card.target_width = cd.width;
@@ -3777,6 +3791,9 @@ impl Cards {
                     items.push(ToolbarItem::Icon { handle: self.icon_fmt_bullet.clone(),        message: Message::FormatBullet });
                     items.push(ToolbarItem::Separator);
                 }
+                let pin_handle = if card.pinned { self.icon_pin_fill.clone() } else { self.icon_pin.clone() };
+                items.push(ToolbarItem::Icon { handle: pin_handle, message: Message::TogglePinCard(card_id) });
+                items.push(ToolbarItem::Separator);
                 items.push(ToolbarItem::Icon { handle: self.icon_duplicate.clone(), message: Message::DuplicateCard(card_id) });
                 items.push(ToolbarItem::Icon { handle: self.icon_delete.clone(),    message: Message::DeleteCard(card_id) });
 
@@ -5859,10 +5876,10 @@ impl Cards {
                     // Zoom
                     ("SECTION", "Zoom"),
                     ("Ctrl + Scroll",         "Zoom in / out toward cursor"),
-                    ("Ctrl + =  /  Ctrl + +", "Zoom in"),
-                    ("Ctrl + \u{2212}",       "Zoom out"),
-                    ("Ctrl + Shift + 0",      "Reset zoom to 100%"),
-                    ("\u{2212}  /  %  /  +",  "Zoom bar: zoom out / reset / zoom in"),
+                    ("Ctrl + +",               "Zoom in  (40% – 500%)"),
+                    ("Ctrl + \u{2212}",        "Zoom out  (40% – 500%)"),
+                    ("Ctrl + 0",               "Recenter canvas + reset zoom"),
+                    ("\u{2212}  /  %  /  +",   "Zoom bar: zoom out / reset / zoom in"),
                     ("SEP", ""),
                     // Boards
                     ("SECTION", "Boards"),

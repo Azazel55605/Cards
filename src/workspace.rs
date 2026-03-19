@@ -119,6 +119,9 @@ pub struct CardData {
     /// True when image_data is an SVG document.
     #[serde(default)]
     pub image_is_svg: bool,
+    /// Whether the card is pinned (cannot be moved). Defaults to false for old files.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 fn default_card_type() -> String {
@@ -146,6 +149,7 @@ impl CardData {
             card_type: card.card_type.as_str().to_string(),
             image_data:   card.image_data.as_ref().map(|arc| arc.as_ref().clone()),
             image_is_svg: card.image_is_svg,
+            pinned: card.pinned,
         }
     }
 

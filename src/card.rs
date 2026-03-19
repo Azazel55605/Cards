@@ -157,6 +157,7 @@ pub struct Card {
     pub icon: CardIcon,
     pub color: Color,
     pub card_type: CardType,
+    pub pinned: bool,
     pub is_dragging: bool,
     pub content: CustomTextEditor,
     pub is_editing: bool,
@@ -181,6 +182,7 @@ impl Clone for Card {
             icon: self.icon,
             color: self.color,
             card_type: self.card_type,
+            pinned: self.pinned,
             is_dragging: self.is_dragging,
             content: self.content.clone(),
             is_editing: self.is_editing,
@@ -680,6 +682,7 @@ impl Card {
             icon: CardIcon::Default,
             color: Color::from_rgb8(124, 92, 252), // Default purple (matches app accent)
             card_type: CardType::Text,
+            pinned: false,
             is_dragging: false,
             content: CustomTextEditor::new(),
             is_editing: false,

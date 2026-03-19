@@ -18,6 +18,10 @@ const ICON_TYPE_TEXT:     &[u8] = include_bytes!("icons/type-text.svg");
 const ICON_TYPE_MARKDOWN: &[u8] = include_bytes!("icons/type-markdown.svg");
 const ICON_TYPE_IMAGE:    &[u8] = include_bytes!("icons/type-image.svg");
 
+fn pin_fill_svg() -> Vec<u8> {
+    crate::icon_util::icon_to_svg(icondata_bs::BsPinFill)
+}
+
 pub struct CardLayer<'a> {
     cards:                &'a [Card],
     offset:               Vector,
@@ -136,6 +140,19 @@ impl<'a> CardLayer<'a> {
             let left_handle = SvgHandle::from_memory(icon_data);
             frame.draw_svg(left_bounds, SvgDrawable::new(left_handle).color(card.color));
 
+            // Pin indicator — drawn to the left of the type icon when card is pinned
+            let pin_offset = if card.pinned {
+                let pin_size = 14.0;
+                let pin_x = screen_x + card.width - icon_size - 8.0 - pin_size - 4.0;
+                let pin_y = screen_y + (top_bar_height - pin_size) / 2.0;
+                let pin_bounds = Rectangle { x: pin_x, y: pin_y, width: pin_size, height: pin_size };
+                let pin_color = Color { a: 0.85, ..card.color };
+                frame.draw_svg(pin_bounds, SvgDrawable::new(SvgHandle::from_memory(pin_fill_svg())).color(pin_color));
+                pin_size + 4.0
+            } else {
+                0.0
+            };
+
             let right_bounds = Rectangle {
                 x: screen_x + card.width - icon_size - 8.0,
                 y: icon_y,
@@ -149,6 +166,7 @@ impl<'a> CardLayer<'a> {
             };
             let right_handle = SvgHandle::from_memory(type_data);
             frame.draw_svg(right_bounds, SvgDrawable::new(right_handle).color(card.color));
+            let _ = pin_offset;
         }
 
         // Content (skip text rendering for Image cards — image is drawn by the renderer)

@@ -13,16 +13,17 @@ Cards is a modern, infinite-canvas note-taking application that lets you organis
 
 ### Key Features
 
-- 🎨 **Infinite Canvas** — Unlimited space across a smooth dot grid
+- 🎨 **Infinite Canvas** — Unlimited space across a smooth dot grid with zoom (40%–500%) and pan
 - 📋 **Multiple Boards** — Separate canvases per board with independent cards; switch instantly
 - 📝 **Markdown Support** — Full markdown rendering inside `<md>` tags with 40+ language syntax highlighting
 - 🎯 **Smart Cards** — Resizable, colour-coded cards with 80+ Bootstrap icons
+- 🖼️ **Image Cards** — Embed raster images (PNG/JPEG/GIF/BMP/WebP) or SVG files directly on the canvas
 - ⚡ **Fast & Native** — Built entirely in Rust for maximum responsiveness
 - 🌓 **Dark / Light Theme** — Smooth animated diagonal-wipe transition between themes
 - 🎨 **Accent Colours** — Choose your accent colour; applied to borders, highlights, gradients, and the sidebar
 - 🔤 **Rich Text Editor** — Custom monospace editor with cursor, selection, word navigation, and system clipboard
 - 🔲 **Interactive Checkboxes** — Click to toggle checkboxes directly in the rendered card view
-- 💾 **Per-Board Auto-Save** — Cards saved per board automatically
+- 💾 **Per-Board Auto-Save** — Cards saved per board automatically every 30 seconds
 - 🎬 **Smooth Animations** — Card move/resize, board transitions, settings open/close, theme wipe
 - ⌨️ **Keyboard-First** — Full shortcut reference available in-app under Settings → Shortcuts
 - 🛠️ **Self-Healing Config** — Missing or obsolete config keys are fixed automatically on startup
@@ -58,10 +59,21 @@ cargo run --release
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl + 0` | Recenter canvas to origin (animated) |
 | `Middle Mouse` | Pan canvas |
 | `Scroll` | Pan canvas vertically / horizontally |
 | `Click + Drag` | Pan canvas (on empty space) |
+
+### Zoom
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl + Scroll` | Zoom in / out toward cursor |
+| `Ctrl + +` | Zoom in (40% – 500%) |
+| `Ctrl + -` | Zoom out (40% – 500%) |
+| `Ctrl + 0` | Recenter canvas + reset zoom to 100% |
+| Zoom bar `−` / `%` / `+` | Zoom out / reset / zoom in |
+
+> Zoom shortcuts match the physical key position and work across keyboard layouts (QWERTY, QWERTZ, AZERTY, etc.)
 
 ### Boards
 
@@ -75,13 +87,23 @@ cargo run --release
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl + A` | Add new card at canvas centre (auto-focuses) |
+| `N` | New card at mouse position (or canvas centre) |
 | `Right-click canvas` | Context menu → Add Card |
-| `Click` | Select card |
-| `Double-click` | Start editing card |
+| `Click` | Edit card |
 | `Drag header` | Move card |
 | `Drag ↘ handle` | Resize card |
+| `Delete` | Delete selected card(s) |
+| `Ctrl + D` | Duplicate selected card(s) |
 | `Esc` | Stop editing / deselect |
+
+### Multi-select
+
+| Shortcut | Action |
+|----------|--------|
+| `Drag empty canvas` | Box-select cards |
+| `Drag header` | Move all selected cards |
+| `Delete` | Delete all selected cards |
+| `Ctrl + D` | Duplicate all selected cards |
 
 ### Text Editing *(inside a card)*
 
@@ -161,19 +183,19 @@ Click the **+** board button at the top of the sidebar.
 **Double-click** a board name to edit it inline. Press `Enter` to confirm or `Esc` to cancel.
 
 #### Deleting Boards
-**Hover** over a board — a red delete button appears on the right. Click it to remove the board.  
+**Hover** over a board — a red delete button appears on the right. Click it to remove the board.
 You cannot delete the last remaining board.
 
 ---
 
 ### Creating Cards
 
+- **`N`** — creates a card at the mouse position, or at viewport centre if the mouse is over the sidebar
 - **Right-click** empty canvas space → **Add Card**
-- **`Ctrl + A`** — creates a card at the viewport centre and immediately starts editing
 
 ### Editing Cards
 
-1. **Double-click** a card to start editing
+1. **Click** a card to start editing
 2. Type your content (plain text or markdown inside `<md>` tags)
 3. Click outside or press `Esc` to stop editing and render the card
 
@@ -182,8 +204,6 @@ You cannot delete the last remaining board.
 Wrap content in `<md>` … `</md>` to enable markdown rendering:
 
 ```
-Some plain text above.
-
 <md>
 # Heading
 
@@ -202,6 +222,13 @@ def hello():
 
 **Auto-complete:** Type `<md>` followed by `>` — the closing tag and an empty line are inserted automatically with the cursor positioned inside.
 
+### Image Cards
+
+Switch a card's type to **Image** via the card toolbar to embed images directly on the canvas:
+
+- Supported formats: PNG, JPEG, GIF, BMP, WebP, SVG
+- Images scale to fit the card and can be resized by dragging the **↘ handle**
+
 ### Customising Cards
 
 1. **Select** a card (single click)
@@ -217,10 +244,12 @@ Hover over or select a card — a **↘ handle** appears in the bottom-right cor
 
 Drag the **coloured header bar** at the top of any card. Cards snap to the grid on release and can be moved while selected or unselected.
 
-### Canvas Navigation
+### Canvas Navigation & Zoom
 
 - **Pan:** Click + drag empty space, or scroll
-- **Recenter:** `Ctrl + 0` — smoothly animates back to origin (0, 0)
+- **Zoom:** `Ctrl + Scroll` to zoom toward the cursor; `Ctrl + +` / `Ctrl + -` to step in or out
+- **Recenter + reset zoom:** `Ctrl + 0` — animates back to origin and restores 100% zoom
+- **Zoom bar:** The pill widget in the bottom-right shows the current zoom level and provides one-click zoom in, reset, and zoom out
 
 ---
 
@@ -296,7 +325,7 @@ Missing keys are added with defaults; obsolete keys are removed — automaticall
 
 ## 📝 Tips & Tricks
 
-1. **Quick card:** `Ctrl + A` drops a focused card at the centre of your current view
+1. **Quick card:** `N` drops a card at your cursor; canvas centre is used as fallback when the mouse is over the sidebar
 2. **Auto-complete Markdown:** Type `<md>` + `>` and the closing tag inserts itself
 3. **Syntax highlighting:** ` ```python ` opens a highlighted Python block
 4. **Colour categories:** Assign colours + icons to group related cards visually
@@ -305,9 +334,11 @@ Missing keys are added with defaults; obsolete keys are removed — automaticall
 7. **Clickable checkboxes:** `- [ ]` / `- [x]` items are directly toggleable in rendered view
 8. **Toolbar wrapping:** Select text → click a toolbar button to wrap it in markdown syntax
 9. **Grid snapping:** Drag and resize both snap to the dot grid for perfect alignment
-10. **Lost on canvas?** `Ctrl + 0` animates back to origin smoothly
+10. **Lost on canvas?** `Ctrl + 0` animates back to origin and resets zoom in one step
 11. **Font tuning:** Settings → Appearance → Fonts for family and size
 12. **Board delete button:** Hover a board in the sidebar to reveal the red delete button
+13. **Multi-select:** Drag across empty canvas space to box-select, then move or delete all at once
+14. **Duplicate shortcut:** `Ctrl + D` duplicates the selected card(s), preserving size and colour
 
 ---
 

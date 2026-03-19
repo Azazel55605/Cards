@@ -174,7 +174,7 @@ impl DotGrid {
     pub fn zoom(&self) -> f32 { self.zoom }
 
     pub fn set_zoom(&mut self, zoom: f32) {
-        let clamped = zoom.clamp(0.05, 10.0);
+        let clamped = zoom.clamp(0.4, 5.0);
         if (clamped - self.zoom).abs() > 1e-6 {
             self.zoom = clamped;
             self.static_cache.clear();
@@ -977,12 +977,14 @@ impl Program<DotGridMessage> for &DotGrid {
                                                 Some(DotGridMessage::CardRightClickIcon(card.id)),
                                             );
                                         } else {
-                                            // Drag the card
-                                            state.dragging_card = Some(card.id);
-                                            state.drag_offset = Some(Point::new(
-                                                pos.x - screen_bounds.x,
-                                                pos.y - screen_bounds.y,
-                                            ));
+                                            // Drag the card (blocked if pinned)
+                                            if !card.pinned {
+                                                state.dragging_card = Some(card.id);
+                                                state.drag_offset = Some(Point::new(
+                                                    pos.x - screen_bounds.x,
+                                                    pos.y - screen_bounds.y,
+                                                ));
+                                            }
                                             return (
                                                 iced::widget::canvas::event::Status::Captured,
                                                 Some(DotGridMessage::CardLeftClickBar(card.id, pos)),
