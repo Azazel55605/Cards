@@ -2,7 +2,7 @@ use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame
 use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector};
 use std::cell::Cell;
 use crate::card::{Card, CardSide, Connection};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 
 pub struct DotGridState {
@@ -92,6 +92,10 @@ pub struct DotGrid {
     zoom: f32,
     /// Viewport center in canvas-local coords (updated each frame for conn_screen_midpoint)
     viewport_center: Cell<Point>,
+    /// Animated perpendicular offsets for each connection's endpoints.
+    /// Key: (from_card, from_side, to_card, to_side) → (from_perp, to_perp).
+    /// Updated each tick so connection bundle lines animate smoothly when slots reorder.
+    conn_slot_anim: HashMap<(usize, CardSide, usize, CardSide), (f32, f32)>,
 }
 
 impl DotGrid {
@@ -130,6 +134,7 @@ impl DotGrid {
             toolbar_region: Cell::new(None),
             zoom: 1.0,
             viewport_center: Cell::new(Point::ORIGIN),
+            conn_slot_anim: HashMap::new(),
         }
     }
 
@@ -431,8 +436,10 @@ impl DotGrid {
         let conn = self.connections.get(idx)?;
         let from = self.cards.iter().find(|c| c.id == conn.from_card)?;
         let to   = self.cards.iter().find(|c| c.id == conn.to_card)?;
-        let p0   = side_screen_pos(from, conn.from_side, self.offset);
-        let p3   = side_screen_pos(to,   conn.to_side,   self.offset);
+        let key = (conn.from_card, conn.from_side, conn.to_card, conn.to_side);
+        let (from_perp, to_perp) = self.animated_perps(conn, idx, &key);
+        let p0 = side_pos_with_perp(from, conn.from_side, self.offset, from_perp);
+        let p3 = side_pos_with_perp(to,   conn.to_side,   self.offset, to_perp);
         let dist = ((p0.x - p3.x).powi(2) + (p0.y - p3.y).powi(2)).sqrt();
         let ctrl = (dist * 0.45).max(70.0);
         let (dx0, dy0) = conn.from_side.outward();
@@ -449,10 +456,13 @@ impl DotGrid {
     }
     /// Returns the screen-space bezier midpoint for a given connection (zoom-adjusted).
     pub fn conn_screen_midpoint(&self, conn: &crate::card::Connection) -> Option<Point> {
+        let idx  = self.connections.iter().position(|c| c == conn)?;
         let from = self.cards.iter().find(|c| c.id == conn.from_card)?;
         let to   = self.cards.iter().find(|c| c.id == conn.to_card)?;
-        let p0   = side_screen_pos(from, conn.from_side, self.offset);
-        let p3   = side_screen_pos(to,   conn.to_side,   self.offset);
+        let key = (conn.from_card, conn.from_side, conn.to_card, conn.to_side);
+        let (from_perp, to_perp) = self.animated_perps(conn, idx, &key);
+        let p0 = side_pos_with_perp(from, conn.from_side, self.offset, from_perp);
+        let p3 = side_pos_with_perp(to,   conn.to_side,   self.offset, to_perp);
         let dist = ((p0.x - p3.x).powi(2) + (p0.y - p3.y).powi(2)).sqrt();
         let ctrl = (dist * 0.45).max(70.0);
         let (dx0, dy0) = conn.from_side.outward();
@@ -482,6 +492,76 @@ impl DotGrid {
                 cache.clear();
             }
         }
+    }
+
+    /// Advance the animated perpendicular offsets for connection bundles toward their targets.
+    /// When `animated` is false the offsets snap instantly (animations disabled).
+    pub fn update_conn_slot_anim(&mut self, dt: f32, animated: bool) {
+        let slots = bundle_slots(&self.connections, &self.cards);
+
+        // Collect targets before mutably borrowing conn_slot_anim
+        let mut targets: Vec<((usize, CardSide, usize, CardSide), (f32, f32))> = Vec::new();
+        for (conn_idx, conn) in self.connections.iter().enumerate() {
+            let key = (conn.from_card, conn.from_side, conn.to_card, conn.to_side);
+            let fg = slots.get(&(conn.from_card, conn.from_side)).map(|v| v.as_slice()).unwrap_or(&[]);
+            let tg = slots.get(&(conn.to_card, conn.to_side)).map(|v| v.as_slice()).unwrap_or(&[]);
+            let from_slot = fg.iter().position(|&i| i == conn_idx).unwrap_or(0);
+            let to_slot   = tg.iter().position(|&i| i == conn_idx).unwrap_or(0);
+            let fc = self.cards.iter().find(|c| c.id == conn.from_card);
+            let tc = self.cards.iter().find(|c| c.id == conn.to_card);
+            if let (Some(fc), Some(tc)) = (fc, tc) {
+                let tf = conn_perp_target(fc, conn.from_side, from_slot, fg.len());
+                let tt = conn_perp_target(tc, conn.to_side,   to_slot,   tg.len());
+                targets.push((key, (tf, tt)));
+            }
+        }
+
+        // Remove entries for deleted connections
+        let valid_keys: HashSet<_> = self.connections.iter()
+            .map(|c| (c.from_card, c.from_side, c.to_card, c.to_side))
+            .collect();
+        self.conn_slot_anim.retain(|k, _| valid_keys.contains(k));
+
+        let factor = if animated {
+            let speed = 14.0_f32;
+            1.0 - (-speed * dt).exp()
+        } else {
+            1.0
+        };
+
+        for (key, (tf, tt)) in targets {
+            let entry = self.conn_slot_anim.entry(key).or_insert((tf, tt));
+            entry.0 += (tf - entry.0) * factor;
+            entry.1 += (tt - entry.1) * factor;
+        }
+    }
+
+    pub fn conn_slot_anim(&self) -> &HashMap<(usize, CardSide, usize, CardSide), (f32, f32)> {
+        &self.conn_slot_anim
+    }
+
+    /// Returns animated (from_perp, to_perp) for a connection, falling back to slot-based
+    /// computation if the anim map doesn't have an entry yet (first frame).
+    fn animated_perps(
+        &self,
+        conn: &crate::card::Connection,
+        conn_idx: usize,
+        key: &(usize, CardSide, usize, CardSide),
+    ) -> (f32, f32) {
+        if let Some(&perps) = self.conn_slot_anim.get(key) {
+            return perps;
+        }
+        // Fallback: compute from bundle_slots (only needed before the first tick)
+        let slots = bundle_slots(&self.connections, &self.cards);
+        let fg = slots.get(&(conn.from_card, conn.from_side)).map(|v| v.as_slice()).unwrap_or(&[]);
+        let tg = slots.get(&(conn.to_card,   conn.to_side  )).map(|v| v.as_slice()).unwrap_or(&[]);
+        let from_slot = fg.iter().position(|&i| i == conn_idx).unwrap_or(0);
+        let to_slot   = tg.iter().position(|&i| i == conn_idx).unwrap_or(0);
+        let fc = self.cards.iter().find(|c| c.id == conn.from_card);
+        let tc = self.cards.iter().find(|c| c.id == conn.to_card);
+        let fp = fc.map(|c| conn_perp_target(c, conn.from_side, from_slot, fg.len())).unwrap_or(0.0);
+        let tp = tc.map(|c| conn_perp_target(c, conn.to_side,   to_slot,   tg.len())).unwrap_or(0.0);
+        (fp, tp)
     }
 
     pub fn dot_spacing(&self) -> f32 {
@@ -788,7 +868,7 @@ fn rounded_rectangle(rect: Rectangle, radius: f32) -> Path {
 }
 
 
-/// Returns the screen-space position of a card's side attachment point.
+/// Returns the screen-space center of a card's side (used for connection-dot hit-tests).
 fn side_screen_pos(card: &Card, side: CardSide, offset: Vector) -> Point {
     let sx = card.current_position.x + offset.x;
     let sy = card.current_position.y + offset.y;
@@ -798,6 +878,61 @@ fn side_screen_pos(card: &Card, side: CardSide, offset: Vector) -> Point {
         CardSide::Left   => Point::new(sx, sy + card.height / 2.0),
         CardSide::Right  => Point::new(sx + card.width, sy + card.height / 2.0),
     }
+}
+
+/// Screen-space attachment point with bundle offset applied (matches card_layer rendering).
+fn bundled_side_pos(card: &Card, side: CardSide, offset: Vector, slot: usize, total: usize) -> Point {
+    side_pos_with_perp(card, side, offset, conn_perp_target(card, side, slot, total))
+}
+
+/// Compute the target perpendicular offset for a given slot in a bundle.
+fn conn_perp_target(card: &Card, side: CardSide, slot: usize, total: usize) -> f32 {
+    let side_len = match side {
+        CardSide::Top | CardSide::Bottom => card.width,
+        CardSide::Left | CardSide::Right => card.height,
+    };
+    crate::card::conn_bundle_offset(slot, total, side_len)
+}
+
+/// Screen-space attachment point using a direct perpendicular offset (for animations).
+fn side_pos_with_perp(card: &Card, side: CardSide, offset: Vector, perp: f32) -> Point {
+    let sx = card.current_position.x + offset.x;
+    let sy = card.current_position.y + offset.y;
+    match side {
+        CardSide::Top    => Point::new(sx + card.width / 2.0 + perp, sy),
+        CardSide::Bottom => Point::new(sx + card.width / 2.0 + perp, sy + card.height),
+        CardSide::Left   => Point::new(sx, sy + card.height / 2.0 + perp),
+        CardSide::Right  => Point::new(sx + card.width, sy + card.height / 2.0 + perp),
+    }
+}
+
+/// Build a map from (card_id, side) → ordered list of connection indices that attach there.
+/// Connections are sorted by the other endpoint's position along the side's tangent axis so that
+/// bundle lines never cross each other when cards move.
+fn bundle_slots(connections: &[crate::card::Connection], cards: &[Card]) -> HashMap<(usize, CardSide), Vec<usize>> {
+    let card_center = |id: usize| -> (f32, f32) {
+        cards.iter().find(|c| c.id == id)
+            .map(|c| (c.current_position.x + c.width / 2.0, c.current_position.y + c.height / 2.0))
+            .unwrap_or((0.0, 0.0))
+    };
+    let mut map: HashMap<(usize, CardSide), Vec<usize>> = HashMap::new();
+    for (i, conn) in connections.iter().enumerate() {
+        map.entry((conn.from_card, conn.from_side)).or_default().push(i);
+        map.entry((conn.to_card,   conn.to_side  )).or_default().push(i);
+    }
+    // Sort each group so slots are assigned in spatial order → no crossing lines.
+    for ((card_id, side), indices) in map.iter_mut() {
+        indices.sort_by(|&a, &b| {
+            let other_a = if connections[a].from_card == *card_id { connections[a].to_card } else { connections[a].from_card };
+            let other_b = if connections[b].from_card == *card_id { connections[b].to_card } else { connections[b].from_card };
+            let (ax, ay) = card_center(other_a);
+            let (bx, by) = card_center(other_b);
+            let key_a = match side { CardSide::Top | CardSide::Bottom => ax, CardSide::Left | CardSide::Right => ay };
+            let key_b = match side { CardSide::Top | CardSide::Bottom => bx, CardSide::Left | CardSide::Right => by };
+            key_a.partial_cmp(&key_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    map
 }
 
 fn cubic_bezier_pt(t: f32, p0: Point, p1: Point, p2: Point, p3: Point) -> Point {
@@ -811,9 +946,13 @@ fn cubic_bezier_pt(t: f32, p0: Point, p1: Point, p2: Point, p3: Point) -> Point 
 }
 
 /// Returns true if `cursor` is within `threshold` pixels of the bezier connection curve.
-fn connection_hit(from: &Card, to: &Card, conn: &crate::card::Connection, offset: Vector, cursor: Point, threshold: f32) -> bool {
-    let p0 = side_screen_pos(from, conn.from_side, offset);
-    let p3 = side_screen_pos(to,   conn.to_side,   offset);
+fn connection_hit(
+    from: &Card, from_perp: f32,
+    to: &Card, to_perp: f32,
+    conn: &crate::card::Connection, offset: Vector, cursor: Point, threshold: f32,
+) -> bool {
+    let p0 = side_pos_with_perp(from, conn.from_side, offset, from_perp);
+    let p3 = side_pos_with_perp(to,   conn.to_side,   offset, to_perp);
     let dist = ((p0.x - p3.x).powi(2) + (p0.y - p3.y).powi(2)).sqrt();
     let ctrl = (dist * 0.45).max(70.0);
     let (dx0, dy0) = conn.from_side.outward();
@@ -1047,11 +1186,13 @@ impl Program<DotGridMessage> for &DotGrid {
                             }
 
                             // Check if clicking on a connection line
-                            for conn in self.connections.iter() {
+                            for (idx, conn) in self.connections.iter().enumerate() {
                                 let from = self.cards.iter().find(|c| c.id == conn.from_card);
                                 let to   = self.cards.iter().find(|c| c.id == conn.to_card);
                                 if let (Some(from), Some(to)) = (from, to) {
-                                    if connection_hit(from, to, conn, self.offset, pos, 8.0) {
+                                    let key = (conn.from_card, conn.from_side, conn.to_card, conn.to_side);
+                                    let (fp, tp) = self.animated_perps(conn, idx, &key);
+                                    if connection_hit(from, fp, to, tp, conn, self.offset, pos, 8.0) {
                                         return (
                                             iced::widget::canvas::event::Status::Captured,
                                             Some(DotGridMessage::ConnectionClick {
@@ -1148,11 +1289,13 @@ impl Program<DotGridMessage> for &DotGrid {
                     mouse::Event::ButtonPressed(mouse::Button::Right) => {
                         if let Some(pos) = current_pos {
                             // Check if right-clicking a connection line first
-                            for conn in self.connections.iter() {
+                            for (idx, conn) in self.connections.iter().enumerate() {
                                 let from = self.cards.iter().find(|c| c.id == conn.from_card);
                                 let to   = self.cards.iter().find(|c| c.id == conn.to_card);
                                 if let (Some(from), Some(to)) = (from, to) {
-                                    if connection_hit(from, to, conn, self.offset, pos, 8.0) {
+                                    let key = (conn.from_card, conn.from_side, conn.to_card, conn.to_side);
+                                    let (fp, tp) = self.animated_perps(conn, idx, &key);
+                                    if connection_hit(from, fp, to, tp, conn, self.offset, pos, 8.0) {
                                         return (
                                             iced::widget::canvas::event::Status::Captured,
                                             Some(DotGridMessage::DeleteConnection {
@@ -1333,7 +1476,9 @@ impl Program<DotGridMessage> for &DotGrid {
                         let from = self.cards.iter().find(|c| c.id == conn.from_card);
                         let to   = self.cards.iter().find(|c| c.id == conn.to_card);
                         if let (Some(from), Some(to)) = (from, to) {
-                            if connection_hit(from, to, conn, self.offset, pos, 8.0) {
+                            let key = (conn.from_card, conn.from_side, conn.to_card, conn.to_side);
+                            let (fp, tp) = self.animated_perps(conn, idx, &key);
+                            if connection_hit(from, fp, to, tp, conn, self.offset, pos, 8.0) {
                                 new_hovered_conn = Some(idx);
                                 break;
                             }

@@ -52,7 +52,7 @@ impl LineStyle {
 }
 
 /// Which side of a card a connection attaches to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CardSide { Top, Bottom, Left, Right }
 
 impl CardSide {
@@ -102,6 +102,22 @@ impl Connection {
     pub fn new(from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide) -> Self {
         Self { from_card, from_side, to_card, to_side, line_style: LineStyle::Solid, arrow_from: false, arrow_to: false }
     }
+}
+
+/// Perpendicular offset along a card side for bundled (parallel) connections.
+///
+/// When N connections share the same (card, side) attachment, they are spread evenly
+/// along the side, centered on the midpoint.  `slot` is this connection's 0-based rank
+/// within that group; `side_length` is `card.width` for Top/Bottom or `card.height` for
+/// Left/Right.
+pub fn conn_bundle_offset(slot: usize, total: usize, side_length: f32) -> f32 {
+    if total <= 1 { return 0.0; }
+    let desired_spacing = 22.0_f32;
+    // Clamp so the outermost points never come within 20px of the card's corner
+    let max_span = (side_length - 40.0).max(desired_spacing);
+    let spacing = ((total - 1) as f32 * desired_spacing).min(max_span) / (total - 1) as f32;
+    let center = (total - 1) as f32 * spacing / 2.0;
+    slot as f32 * spacing - center
 }
 
 /// The display / editing mode of a card.

@@ -8,7 +8,7 @@ use iced::widget::canvas::{gradient, Frame, Path, Stroke};
 use iced::widget::canvas::path::Builder;
 use iced::advanced::svg::{Svg as SvgDrawable, Handle as SvgHandle};
 use iced::{Color, Element, Length, Point, Rectangle, Size, Vector};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::card::{Card, CardSide, CardType, Connection, LineStyle};
 use crate::markdown::MarkdownRenderer;
@@ -39,6 +39,7 @@ pub struct CardLayer<'a> {
     pending_conn:         Option<(usize, CardSide)>,
     pending_cursor:       Point,
     conn_anim_phase:      f32,
+    conn_slot_anim:       Option<&'a HashMap<(usize, CardSide, usize, CardSide), (f32, f32)>>,
     // Zoom
     zoom:                 f32,
 }
@@ -74,6 +75,7 @@ impl<'a> CardLayer<'a> {
             pending_conn: None,
             pending_cursor: Point::ORIGIN,
             conn_anim_phase: 0.0,
+            conn_slot_anim: None,
             zoom: 1.0,
         }
     }
@@ -90,11 +92,13 @@ impl<'a> CardLayer<'a> {
         pending_conn:    Option<(usize, CardSide)>,
         pending_cursor:  Point,
         conn_anim_phase: f32,
+        conn_slot_anim:  &'a HashMap<(usize, CardSide, usize, CardSide), (f32, f32)>,
     ) -> Self {
         self.connections     = connections;
         self.pending_conn    = pending_conn;
         self.pending_cursor  = pending_cursor;
         self.conn_anim_phase = conn_anim_phase;
+        self.conn_slot_anim  = Some(conn_slot_anim);
         self
     }
 
@@ -343,11 +347,31 @@ impl<'a, Message> Widget<Message, iced::Theme, iced::Renderer> for CardLayer<'a>
                 let mut frame = Frame::new(&*renderer, bounds.size());
                 frame.with_save(|frame| {
                     apply_zoom(frame);
-                    for conn in self.connections {
+                    // Fallback slot map — lazily computed if anim map has no entry for a connection.
+                    let mut fallback_slots: Option<HashMap<(usize, CardSide), Vec<usize>>> = None;
+                    for (conn_idx, conn) in self.connections.iter().enumerate() {
                         let from = self.cards.iter().find(|c| c.id == conn.from_card);
                         let to   = self.cards.iter().find(|c| c.id == conn.to_card);
                         if let (Some(from), Some(to)) = (from, to) {
-                            draw_connection(frame, from, to, conn, self.offset);
+                            let key = (conn.from_card, conn.from_side, conn.to_card, conn.to_side);
+                            let (from_perp, to_perp) = {
+                                // Try the animated offsets first, fall back to slot-based computation.
+                                let animated = self.conn_slot_anim.and_then(|a| a.get(&key).copied());
+                                if let Some(perps) = animated {
+                                    perps
+                                } else {
+                                    let slots = fallback_slots.get_or_insert_with(|| {
+                                        bundle_slots(self.connections, self.cards)
+                                    });
+                                    let fg = slots.get(&(conn.from_card, conn.from_side)).map(|v| v.as_slice()).unwrap_or(&[]);
+                                    let tg = slots.get(&(conn.to_card,   conn.to_side  )).map(|v| v.as_slice()).unwrap_or(&[]);
+                                    let fs = fg.iter().position(|&i| i == conn_idx).unwrap_or(0);
+                                    let ts = tg.iter().position(|&i| i == conn_idx).unwrap_or(0);
+                                    (conn_perp_target(from, conn.from_side, fs, fg.len()),
+                                     conn_perp_target(to,   conn.to_side,   ts, tg.len()))
+                                }
+                            };
+                            draw_connection(frame, from, from_perp, to, to_perp, conn, self.offset);
                         }
                     }
                 });
@@ -453,6 +477,7 @@ impl<'a, Message: 'a> From<CardLayer<'a>> for Element<'a, Message> {
 
 // ── Connection rendering ───────────────────────────────────────────────────────
 
+/// Screen-space center of a card's side (used for side-dot indicators and pending lines).
 fn side_screen_pos(card: &Card, side: CardSide, offset: Vector) -> Point {
     let sx = card.current_position.x + offset.x;
     let sy = card.current_position.y + offset.y;
@@ -462,6 +487,56 @@ fn side_screen_pos(card: &Card, side: CardSide, offset: Vector) -> Point {
         CardSide::Left   => Point::new(sx, sy + card.height / 2.0),
         CardSide::Right  => Point::new(sx + card.width, sy + card.height / 2.0),
     }
+}
+
+/// Screen-space attachment point using a direct perpendicular offset (for animations).
+fn side_pos_with_perp(card: &Card, side: CardSide, offset: Vector, perp: f32) -> Point {
+    let sx = card.current_position.x + offset.x;
+    let sy = card.current_position.y + offset.y;
+    match side {
+        CardSide::Top    => Point::new(sx + card.width / 2.0 + perp, sy),
+        CardSide::Bottom => Point::new(sx + card.width / 2.0 + perp, sy + card.height),
+        CardSide::Left   => Point::new(sx, sy + card.height / 2.0 + perp),
+        CardSide::Right  => Point::new(sx + card.width, sy + card.height / 2.0 + perp),
+    }
+}
+
+/// Compute the target perpendicular offset for a given slot in a bundle (fallback for first frame).
+fn conn_perp_target(card: &Card, side: CardSide, slot: usize, total: usize) -> f32 {
+    let side_len = match side {
+        CardSide::Top | CardSide::Bottom => card.width,
+        CardSide::Left | CardSide::Right => card.height,
+    };
+    crate::card::conn_bundle_offset(slot, total, side_len)
+}
+
+/// Build a map from (card_id, side) → ordered list of connection indices that attach there.
+/// Connections are sorted by the other endpoint's position along the side's tangent axis so that
+/// bundle lines never cross each other when cards move.
+fn bundle_slots(connections: &[Connection], cards: &[Card]) -> HashMap<(usize, CardSide), Vec<usize>> {
+    let card_center = |id: usize| -> (f32, f32) {
+        cards.iter().find(|c| c.id == id)
+            .map(|c| (c.current_position.x + c.width / 2.0, c.current_position.y + c.height / 2.0))
+            .unwrap_or((0.0, 0.0))
+    };
+    let mut map: HashMap<(usize, CardSide), Vec<usize>> = HashMap::new();
+    for (i, conn) in connections.iter().enumerate() {
+        map.entry((conn.from_card, conn.from_side)).or_default().push(i);
+        map.entry((conn.to_card,   conn.to_side  )).or_default().push(i);
+    }
+    // Sort each group so slots are assigned in spatial order → no crossing lines.
+    for ((card_id, side), indices) in map.iter_mut() {
+        indices.sort_by(|&a, &b| {
+            let other_a = if connections[a].from_card == *card_id { connections[a].to_card } else { connections[a].from_card };
+            let other_b = if connections[b].from_card == *card_id { connections[b].to_card } else { connections[b].from_card };
+            let (ax, ay) = card_center(other_a);
+            let (bx, by) = card_center(other_b);
+            let key_a = match side { CardSide::Top | CardSide::Bottom => ax, CardSide::Left | CardSide::Right => ay };
+            let key_b = match side { CardSide::Top | CardSide::Bottom => bx, CardSide::Left | CardSide::Right => by };
+            key_a.partial_cmp(&key_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    map
 }
 
 fn cubic_bezier(t: f32, p0: Point, p1: Point, p2: Point, p3: Point) -> Point {
@@ -494,9 +569,14 @@ fn bezier_arc_length(p0: Point, p1: Point, p2: Point, p3: Point) -> f32 {
     len
 }
 
-fn draw_connection(frame: &mut Frame, from: &Card, to: &Card, conn: &Connection, offset: Vector) {
-    let p0 = side_screen_pos(from, conn.from_side, offset);
-    let p3 = side_screen_pos(to,   conn.to_side,   offset);
+fn draw_connection(
+    frame: &mut Frame,
+    from: &Card, from_perp: f32,
+    to: &Card, to_perp: f32,
+    conn: &Connection, offset: Vector,
+) {
+    let p0 = side_pos_with_perp(from, conn.from_side, offset, from_perp);
+    let p3 = side_pos_with_perp(to,   conn.to_side,   offset, to_perp);
 
     let dist = ((p0.x - p3.x).powi(2) + (p0.y - p3.y).powi(2)).sqrt();
     let ctrl = (dist * 0.45).max(70.0);

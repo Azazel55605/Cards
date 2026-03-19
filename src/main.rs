@@ -430,6 +430,8 @@ impl Cards {
         let accent_color = config.appearance.accent_color.to_color();
 
         let mut dot_grid = DotGrid::new(theme.dot_color(), theme.background());
+        // Sync the background dot effect with the persisted animations setting right away.
+        dot_grid.set_effect_enabled(config.general.enable_animations);
         dot_grid.set_dot_spacing(DOT_SPACING);
         dot_grid.set_dot_radius(DOT_RADIUS);
         dot_grid.set_card_colors(
@@ -736,6 +738,8 @@ impl Cards {
 
                 // Update card animations
                 self.dot_grid.update_card_animation(delta_time);
+                // Advance connection slot animations (respects enable_animations flag)
+                self.dot_grid.update_conn_slot_anim(delta_time, self.config.general.enable_animations);
 
                 // Clear cards cache if editing to show blinking cursor
                 if self.editing_card_id.is_some() {
@@ -3658,6 +3662,7 @@ impl Cards {
             self.dot_grid.pending_conn(),
             self.dot_grid.pending_cursor(),
             self.dot_grid.conn_anim_phase(),
+            self.dot_grid.conn_slot_anim(),
         ).with_zoom(self.canvas_zoom).into();
 
         let mut shelf = CardShelf::new(
