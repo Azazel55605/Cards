@@ -10,11 +10,85 @@
 ///   - Compact binary (2-4× smaller than JSON/TOML)
 ///   - Fast encode/decode
 ///   - Schema-versioned for forward-compatibility
+///
+/// Image bytes are stored as `Option<Arc<Vec<u8>>>` internally (cheap O(1)
+/// clone when handing the workspace to the background save thread) and
+/// serialised/deserialised as a raw MessagePack Bin blob via `arc_bytes`.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::fs;
 use std::io::Write;
+
+// ── Custom serde for Option<Arc<Vec<u8>>> ─────────────────────────────────────
+//
+// rmp-serde would otherwise serialise Vec<u8> as a msgpack array of integers
+// (one map entry per byte) rather than a compact Bin blob.  We use
+// `serialize_bytes` / `deserialize_bytes` to get the efficient binary path.
+// The deserialiser also accepts the old array-of-integers form so that any
+// workspaces saved with a previous build can still be loaded.
+
+mod arc_bytes {
+    use serde::de::{SeqAccess, Visitor};
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+    use std::sync::Arc;
+
+    pub fn serialize<S: Serializer>(
+        v: &Option<Arc<Vec<u8>>>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(arc) => s.serialize_bytes(arc.as_slice()),
+            None      => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Arc<Vec<u8>>>, D::Error> {
+        struct OptVisitor;
+        impl<'de> Visitor<'de> for OptVisitor {
+            type Value = Option<Arc<Vec<u8>>>;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "optional byte array")
+            }
+            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+            fn visit_some<D2: Deserializer<'de>>(
+                self,
+                d2: D2,
+            ) -> Result<Self::Value, D2::Error> {
+                struct BytesVisitor;
+                impl<'de> Visitor<'de> for BytesVisitor {
+                    type Value = Arc<Vec<u8>>;
+                    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                        write!(f, "byte array")
+                    }
+                    // msgpack Bin format (new, compact)
+                    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                        Ok(Arc::new(v.to_vec()))
+                    }
+                    fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                        Ok(Arc::new(v))
+                    }
+                    // msgpack array-of-ints (old format, backward compat)
+                    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                        let mut v = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                        while let Some(b) = seq.next_element::<u8>()? {
+                            v.push(b);
+                        }
+                        Ok(Arc::new(v))
+                    }
+                }
+                d2.deserialize_bytes(BytesVisitor).map(Some)
+            }
+        }
+        d.deserialize_option(OptVisitor)
+    }
+}
 
 /// Magic bytes at the start of every .cards file
 const FILE_MAGIC: &[u8; 6] = b"CARDS\x01";
@@ -114,8 +188,10 @@ pub struct CardData {
     #[serde(default = "default_card_type")]
     pub card_type: String,
     /// Raw image bytes — only present for Image cards. Stored as MessagePack bin (no base64).
+    /// Arc-backed so handing a WorkspaceFile to the background save thread is O(1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_data: Option<Vec<u8>>,
+    #[serde(serialize_with = "arc_bytes::serialize", deserialize_with = "arc_bytes::deserialize")]
+    pub image_data: Option<Arc<Vec<u8>>>,
     /// True when image_data is an SVG document.
     #[serde(default)]
     pub image_is_svg: bool,
@@ -157,7 +233,7 @@ impl CardData {
             color_b: (c.b * 255.0) as u8,
             color_a: (c.a * 255.0) as u8,
             card_type: card.card_type.as_str().to_string(),
-            image_data:   card.image_data.as_ref().map(|arc| arc.as_ref().clone()),
+            image_data:   card.image_data.clone(), // O(1) — Arc ref-count bump only
             image_is_svg: card.image_is_svg,
             pinned: card.pinned,
             collapsed: card.collapsed,
@@ -368,9 +444,14 @@ impl WorkspaceFile {
         }
     }
 
-    /// Save to a `.cards` file.
+    /// Save to a `.cards` file (or a temp file supplied by the save worker).
     /// Format: 6-byte magic | 1-byte version | rmp-encoded payload
+    ///
+    /// Uses a `BufWriter` so that the large image payload is flushed in one
+    /// syscall instead of many small ones.
     pub fn save(&self, path: &Path) -> Result<(), WorkspaceError> {
+        use std::io::BufWriter;
+
         // Create parent dirs if needed
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -380,14 +461,13 @@ impl WorkspaceFile {
         let payload = rmp_serde::to_vec_named(self)
             .map_err(|e| WorkspaceError::Encode(e.to_string()))?;
 
-        let mut file = fs::File::create(path)
+        let file = fs::File::create(path)
             .map_err(|e| WorkspaceError::Io(e.to_string()))?;
+        let mut bw = BufWriter::new(file);
 
-        file.write_all(FILE_MAGIC)
-            .map_err(|e| WorkspaceError::Io(e.to_string()))?;
-        file.write_all(&[FORMAT_VERSION])
-            .map_err(|e| WorkspaceError::Io(e.to_string()))?;
-        file.write_all(&payload)
+        bw.write_all(FILE_MAGIC)
+            .and_then(|_| bw.write_all(&[FORMAT_VERSION]))
+            .and_then(|_| bw.write_all(&payload))
             .map_err(|e| WorkspaceError::Io(e.to_string()))?;
 
         Ok(())

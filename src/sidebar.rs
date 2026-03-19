@@ -374,8 +374,8 @@ where
         // Handle floating button events
         if self.floating_button.is_some() && sidebar_x + self.width < 0.0 {
             if let Some(button_layout) = children.next() {
-                let button_x = 25.0;
-                let button_y = full_bounds.height - 40.0 - 25.0;
+                let button_x = 15.0;
+                let button_y = full_bounds.height - 40.0 - 14.0;
 
                 let button_bounds = Rectangle {
                     x: button_x,
@@ -467,8 +467,8 @@ where
         // Check floating button
         if self.floating_button.is_some() && sidebar_x + self.width < 0.0 {
             if let Some(button_layout) = children.next() {
-                let button_x = 25.0;
-                let button_y = full_bounds.height - 40.0 - 25.0;
+                let button_x = 15.0;
+                let button_y = full_bounds.height - 40.0 - 14.0;
 
                 let button_bounds = Rectangle {
                     x: button_x,

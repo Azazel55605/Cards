@@ -46,6 +46,17 @@ pub struct AppearanceConfig {
     #[serde(default = "default_accent_color")]
     pub accent_color: AccentColor,
 
+    /// Whether to show the dot pattern on the canvas background.
+    #[serde(default = "default_true")]
+    pub show_dots: bool,
+
+    /// Whether to draw permanent grid lines between the dots.
+    #[serde(default = "default_false")]
+    pub show_grid_lines: bool,
+
+    /// Whether to enable the mouse-hover animation on the canvas dots.
+    #[serde(default = "default_true")]
+    pub enable_dot_animation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +233,9 @@ impl Default for AppearanceConfig {
             theme: default_theme(),
             font: FontConfig::default(),
             accent_color: default_accent_color(),
+            show_dots: true,
+            show_grid_lines: false,
+            enable_dot_animation: true,
         }
     }
 }
@@ -442,6 +456,21 @@ impl Config {
 
     pub fn set_accent_color(&mut self, color: AccentColor) -> Result<(), ConfigError> {
         self.appearance.accent_color = color;
+        self.save()
+    }
+
+    pub fn set_show_dots(&mut self, show: bool) -> Result<(), ConfigError> {
+        self.appearance.show_dots = show;
+        self.save()
+    }
+
+    pub fn set_show_grid_lines(&mut self, show: bool) -> Result<(), ConfigError> {
+        self.appearance.show_grid_lines = show;
+        self.save()
+    }
+
+    pub fn set_enable_dot_animation(&mut self, enabled: bool) -> Result<(), ConfigError> {
+        self.appearance.enable_dot_animation = enabled;
         self.save()
     }
 

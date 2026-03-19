@@ -30,6 +30,7 @@ mod import_export;
 mod import_export_modal;
 mod zoom_bar;
 mod minimap_overlay;
+mod save_worker;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -60,6 +61,7 @@ use card_layer::CardLayer;
 use card_shelf::{CardShelf, SHELF_HEIGHT, GHOST_CARD_W, GHOST_TOP_BAR_H};
 use zoom_bar::ZoomBar;
 use minimap_overlay::{MinimapOverlay, MinimapCard, MinimapConn};
+use save_worker::SaveWorker;
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -206,6 +208,9 @@ pub enum Message {
     SetFontFamily(FontFamily),
     SetFontSize(f32),
     SetAccentColor(AccentColor),
+    SetShowDots(bool),
+    SetShowGridLines(bool),
+    SetDotAnimation(bool),
     Tick(Instant),
     DotGridMessage(DotGridMessage),
     EventOccurred(Event),
@@ -411,14 +416,15 @@ struct Cards {
     workspace_modal: Option<WorkspaceModalState>,
     /// True when the "Open Recent" submenu is hovered open
     recent_submenu_open: bool,
-    /// True when unsaved changes exist — triggers a save at the end of update()
+    /// True when content (cards, text, connections) has changed since last save.
     workspace_dirty: bool,
-    /// True when only the canvas position changed (debounced save)
+    /// True when only the canvas position/zoom changed since last save.
     canvas_position_dirty: bool,
-    /// Timestamp of the last file write, for debouncing position-only saves
-    last_save_instant: Instant,
-    /// Seconds since last save; we save every AUTO_SAVE_INTERVAL_SECS
-    time_since_last_save: f32,
+    /// When dirty was first set in the current unsaved period.
+    /// A save is queued once the appropriate debounce window elapses.
+    dirty_since: Option<Instant>,
+    /// Background thread that serialises and writes workspace files.
+    save_worker: SaveWorker,
     // Import / Export modal
     import_export_modal: Option<ImportExportState>,
     import_export_submenu_open: bool,
@@ -443,8 +449,10 @@ impl Cards {
         let accent_color = config.appearance.accent_color.to_color();
 
         let mut dot_grid = DotGrid::new(theme.dot_color(), theme.background());
-        // Sync the background dot effect with the persisted animations setting right away.
-        dot_grid.set_effect_enabled(config.general.enable_animations);
+        // Sync canvas settings from persisted config right away.
+        dot_grid.set_effect_enabled(config.appearance.enable_dot_animation && config.general.enable_animations);
+        dot_grid.set_dots_visible(config.appearance.show_dots);
+        dot_grid.set_grid_lines(config.appearance.show_grid_lines);
         dot_grid.set_dot_spacing(DOT_SPACING);
         dot_grid.set_dot_radius(DOT_RADIUS);
         dot_grid.set_card_colors(
@@ -565,8 +573,8 @@ impl Cards {
             recent_submenu_open: false,
             workspace_dirty: false,
             canvas_position_dirty: false,
-            last_save_instant: Instant::now(),
-            time_since_last_save: 0.0,
+            dirty_since: None,
+            save_worker: SaveWorker::spawn(),
             import_export_modal: None,
             import_export_submenu_open: false,
             shelf_drag: None,
@@ -677,7 +685,7 @@ impl Cards {
                 } else {
                     // Instant toggle
                     self.settings_open = !self.settings_open;
-                    self.dot_grid.set_effect_enabled(!self.settings_open && self.config.general.enable_animations);
+                    self.dot_grid.set_effect_enabled(!self.settings_open && self.config.general.enable_animations && self.config.appearance.enable_dot_animation);
                     self.update_exclude_region();
                 }
                 self.context_menu_position = None;
@@ -692,7 +700,7 @@ impl Cards {
                 } else {
                     // Instant close
                     self.settings_open = false;
-                    self.dot_grid.set_effect_enabled(self.config.general.enable_animations);
+                    self.dot_grid.set_effect_enabled(self.config.general.enable_animations && self.config.appearance.enable_dot_animation);
                     self.update_exclude_region();
                 }
             }
@@ -708,7 +716,7 @@ impl Cards {
                 if let Err(e) = self.config.set_animations_enabled(enabled) {
                     eprintln!("Failed to save animations setting: {}", e);
                 }
-                self.dot_grid.set_effect_enabled(enabled && !self.settings_open);
+                self.dot_grid.set_effect_enabled(enabled && !self.settings_open && self.config.appearance.enable_dot_animation);
             }
             Message::SetFontFamily(family) => {
                 if self.config.general.debug_mode {
@@ -744,6 +752,25 @@ impl Cards {
                 if let Err(e) = self.config.set_accent_color(accent) {
                     eprintln!("Failed to save accent color setting: {}", e);
                 }
+            }
+            Message::SetShowDots(show) => {
+                self.dot_grid.set_dots_visible(show);
+                if let Err(e) = self.config.set_show_dots(show) {
+                    eprintln!("Failed to save show_dots setting: {}", e);
+                }
+            }
+            Message::SetShowGridLines(show) => {
+                self.dot_grid.set_grid_lines(show);
+                if let Err(e) = self.config.set_show_grid_lines(show) {
+                    eprintln!("Failed to save show_grid_lines setting: {}", e);
+                }
+            }
+            Message::SetDotAnimation(enabled) => {
+                if let Err(e) = self.config.set_enable_dot_animation(enabled) {
+                    eprintln!("Failed to save enable_dot_animation setting: {}", e);
+                }
+                // Only enable the effect if settings panel is closed
+                self.dot_grid.set_effect_enabled(enabled && !self.settings_open);
             }
             Message::Tick(_instant) => {
                 // Calculate delta time since last tick
@@ -881,7 +908,7 @@ impl Cards {
                         if !self.settings_opening {
                             // Animation complete for closing
                             self.settings_open = false;
-                            self.dot_grid.set_effect_enabled(self.config.general.enable_animations);
+                            self.dot_grid.set_effect_enabled(self.config.general.enable_animations && self.config.appearance.enable_dot_animation);
                             self.update_exclude_region();
                         }
                     }
@@ -928,15 +955,35 @@ impl Cards {
                     }
                 }
 
-                // Save current board's cards to keep them synced
+                // Sync current board cards into the HashMap every tick so that
+                // the save snapshot always includes the latest live state.
                 self.save_current_board_cards();
 
-                // Flush any dirty flag set during Tick (e.g. animated board delete)
-                if self.workspace_dirty && self.workspace_path.is_some() {
-                    self.workspace_dirty = false;
-                    self.canvas_position_dirty = false;
-                    self.last_save_instant = Instant::now();
-                    self.save_workspace_to_file();
+                // Record dirty_since the first time any dirty flag is set this cycle.
+                if (self.workspace_dirty || self.canvas_position_dirty) && self.dirty_since.is_none() {
+                    self.dirty_since = Some(Instant::now());
+                }
+
+                // Debounced save:
+                //   • Content changes  → queue save after 1.5 s of inactivity
+                //   • Position-only    → queue save after 3 s  of inactivity
+                // The SaveWorker serialises and writes on a background thread so the UI
+                // is never blocked, and a latest-wins drain means burst writes are cheap.
+                if let Some(since) = self.dirty_since {
+                    let debounce = if self.workspace_dirty {
+                        Duration::from_millis(1500)
+                    } else {
+                        Duration::from_secs(3)
+                    };
+                    if since.elapsed() >= debounce {
+                        if let Some(ref path) = self.workspace_path.clone() {
+                            let ws = self.collect_workspace();
+                            self.save_worker.queue(ws, path.clone());
+                        }
+                        self.workspace_dirty      = false;
+                        self.canvas_position_dirty = false;
+                        self.dirty_since           = None;
+                    }
                 }
 
                 self.update_exclude_region();
@@ -2958,18 +3005,10 @@ impl Cards {
             }
         }
 
-        // Persist any state-changing action immediately
-        if self.workspace_dirty && self.workspace_path.is_some() {
-            self.workspace_dirty = false;
-            self.canvas_position_dirty = false; // absorbed by full save
-            self.last_save_instant = Instant::now();
-            self.save_workspace_to_file();
-        } else if self.canvas_position_dirty && self.workspace_path.is_some() {
-            // Debounce position-only saves: write at most once per second
-            if self.last_save_instant.elapsed() >= Duration::from_secs(1) {
-                self.canvas_position_dirty = false;
-                self.last_save_instant = Instant::now();
-                self.save_workspace_to_file();
+        // Mark dirty and note the time — actual saves are triggered by the Tick handler.
+        if self.workspace_dirty || self.canvas_position_dirty {
+            if self.dirty_since.is_none() {
+                self.dirty_since = Some(Instant::now());
             }
         }
 
@@ -3257,12 +3296,12 @@ impl Cards {
                 card.target_width = cd.width;
                 card.target_height = if cd.collapsed { 30.0 } else { cd.height };
                 card.target_position = card.current_position;
-                // Restore image data and rebuild the cached render handle
-                if let Some(img_bytes) = cd.image_data.clone() {
+                // Restore image data and rebuild the cached render handle.
+                // cd.image_data is already Arc<Vec<u8>>, so clone() is O(1).
+                if let Some(arc) = cd.image_data.clone() {
                     card.image_is_svg = cd.image_is_svg;
-                    let arc = std::sync::Arc::new(img_bytes);
                     card.image_handle = Some(crate::card::build_image_handle(&arc, cd.image_is_svg));
-                    card.image_data = Some(arc);
+                    card.image_data   = Some(arc);
                 }
                 cards.push(card);
             }
@@ -3319,20 +3358,16 @@ impl Cards {
             .iter()
             .enumerate()
             .map(|(idx, name)| {
+                // Iterate cards directly — no Vec<Card> clone needed.
+                // CardData::from_card() does an O(1) Arc bump for image_data.
                 let cards = self.board_cards
                     .get(&idx)
-                    .cloned()
-                    .unwrap_or_default()
-                    .iter()
-                    .map(CardData::from_card)
-                    .collect();
+                    .map(|v| v.iter().map(CardData::from_card).collect())
+                    .unwrap_or_default();
                 let connections = self.board_connections
                     .get(&idx)
-                    .cloned()
-                    .unwrap_or_default()
-                    .iter()
-                    .map(ConnectionData::from_connection)
-                    .collect();
+                    .map(|v| v.iter().map(ConnectionData::from_connection).collect())
+                    .unwrap_or_default();
                 BoardData { name: name.clone(), cards, connections }
             })
             .collect();
@@ -3353,14 +3388,18 @@ impl Cards {
         }
     }
 
-    /// Save the current workspace to its file (if one is set).
+    /// Queue an immediate save via the background worker.
+    /// Use this for explicit user-triggered saves (File → Save, workspace switch, etc.)
+    /// where you want the save to happen as soon as possible but still off-thread.
     fn save_workspace_to_file(&mut self) {
-        let ws = self.collect_workspace();
         if let Some(ref path) = self.workspace_path.clone() {
-            if let Err(e) = ws.save(path) {
-                eprintln!("Auto-save failed: {}", e);
-            } else if self.config.general.debug_mode {
-                println!("DEBUG: Workspace auto-saved to {:?}", path);
+            let ws = self.collect_workspace();
+            self.save_worker.queue(ws, path.clone());
+            self.workspace_dirty       = false;
+            self.canvas_position_dirty = false;
+            self.dirty_since           = None;
+            if self.config.general.debug_mode {
+                println!("DEBUG: Workspace queued for save to {:?}", path);
             }
         }
     }
@@ -6094,6 +6133,44 @@ impl Cards {
                         font_size_label,
                         Space::with_width(Length::Fill),
                         font_size_picker,
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    Space::with_height(20),
+                    text("Canvas").size(14).font(iced::Font {
+                        weight: iced::font::Weight::Semibold,
+                        ..Default::default()
+                    }),
+                    Space::with_height(10),
+                    row![
+                        text("Mouse animation").size(14),
+                        Space::with_width(Length::Fill),
+                        self.build_toggle_button(
+                            self.config.appearance.enable_dot_animation,
+                            Message::SetDotAnimation(!self.config.appearance.enable_dot_animation),
+                        ),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    Space::with_height(10),
+                    row![
+                        text("Show dots").size(14),
+                        Space::with_width(Length::Fill),
+                        self.build_toggle_button(
+                            self.config.appearance.show_dots,
+                            Message::SetShowDots(!self.config.appearance.show_dots),
+                        ),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                    Space::with_height(10),
+                    row![
+                        text("Permanent grid lines").size(14),
+                        Space::with_width(Length::Fill),
+                        self.build_toggle_button(
+                            self.config.appearance.show_grid_lines,
+                            Message::SetShowGridLines(!self.config.appearance.show_grid_lines),
+                        ),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),

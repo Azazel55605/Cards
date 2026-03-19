@@ -98,6 +98,10 @@ pub struct DotGrid {
     conn_slot_anim: HashMap<(usize, CardSide, usize, CardSide), (f32, f32)>,
     /// Flag to cancel the current drag (set via Cell so it works from &self)
     cancel_drag_flag: Cell<bool>,
+    /// Whether to render the dots on the canvas background.
+    dots_visible: bool,
+    /// Whether to draw permanent grid lines between all dots.
+    grid_lines: bool,
 }
 
 impl DotGrid {
@@ -138,6 +142,8 @@ impl DotGrid {
             viewport_center: Cell::new(Point::ORIGIN),
             conn_slot_anim: HashMap::new(),
             cancel_drag_flag: Cell::new(false),
+            dots_visible: true,
+            grid_lines: false,
         }
     }
 
@@ -207,6 +213,20 @@ impl DotGrid {
 
     pub fn set_effect_enabled(&mut self, enabled: bool) {
         self.effect_enabled = enabled;
+    }
+
+    pub fn set_dots_visible(&mut self, visible: bool) {
+        if self.dots_visible != visible {
+            self.dots_visible = visible;
+            self.static_cache.clear();
+        }
+    }
+
+    pub fn set_grid_lines(&mut self, enabled: bool) {
+        if self.grid_lines != enabled {
+            self.grid_lines = enabled;
+            self.static_cache.clear();
+        }
     }
 
     pub fn set_dot_spacing(&mut self, spacing: f32) {
@@ -806,6 +826,10 @@ impl DotGrid {
             self.background_color,
         );
 
+        if !self.dots_visible && !self.grid_lines {
+            return;
+        }
+
         let z  = self.zoom;
         let vs = self.dot_spacing * z; // visual spacing between dots in screen pixels
         let cx = bounds.width  / 2.0;
@@ -821,14 +845,45 @@ impl DotGrid {
         let cols = (bounds.width  / vs) as i32 + 2;
         let rows = (bounds.height / vs) as i32 + 2;
 
-        for row in 0..rows {
+        if self.grid_lines {
+            // Draw permanent grid lines between all dots
+            let line_color = Color {
+                a: self.dot_color.a * 0.4,
+                ..self.dot_color
+            };
+            let stroke = Stroke {
+                style: iced::widget::canvas::stroke::Style::Solid(line_color),
+                width: 1.0,
+                ..Default::default()
+            };
+            // Vertical lines
             for col in 0..cols {
                 let x = col as f32 * vs + fox;
+                let top_y = foy;
+                let bot_y = (rows - 1) as f32 * vs + foy;
+                let path = Path::line(Point::new(x, top_y), Point::new(x, bot_y));
+                frame.stroke(&path, stroke.clone());
+            }
+            // Horizontal lines
+            for row in 0..rows {
                 let y = row as f32 * vs + foy;
+                let left_x = fox;
+                let right_x = (cols - 1) as f32 * vs + fox;
+                let path = Path::line(Point::new(left_x, y), Point::new(right_x, y));
+                frame.stroke(&path, stroke.clone());
+            }
+        }
 
-                // Skip dots in the exclude region
-                if !self.is_in_exclude_region(x, y) {
-                    frame.fill(&Path::circle(Point::new(x, y), self.dot_radius), self.dot_color);
+        if self.dots_visible {
+            for row in 0..rows {
+                for col in 0..cols {
+                    let x = col as f32 * vs + fox;
+                    let y = row as f32 * vs + foy;
+
+                    // Skip dots in the exclude region
+                    if !self.is_in_exclude_region(x, y) {
+                        frame.fill(&Path::circle(Point::new(x, y), self.dot_radius), self.dot_color);
+                    }
                 }
             }
         }
@@ -1676,6 +1731,83 @@ impl Program<DotGridMessage> for &DotGrid {
                 };
 
                 affected_positions.push((base_pos, draw_pos, line_factor, in_exclude));
+            }
+        }
+
+        // When grid lines are on, warp them in the affected area so they follow displaced dots.
+        if self.grid_lines {
+            let grid_color = Color { a: self.dot_color.a * 0.4, ..self.dot_color };
+            let grid_stroke = Stroke::default().with_color(grid_color).with_width(1.0);
+
+            // Erase the static grid lines inside the affected region by painting over them
+            // with the background color, then redraw with displaced positions.
+            let erase_left  = (min_col as f32 * vs + fox).max(0.0);
+            let erase_top   = (min_row as f32 * vs + foy).max(0.0);
+            let erase_right  = (max_col as f32 * vs + fox).min(bounds.width);
+            let erase_bottom = (max_row as f32 * vs + foy).min(bounds.height);
+            if erase_right > erase_left && erase_bottom > erase_top {
+                dynamic_frame.fill_rectangle(
+                    Point::new(erase_left, erase_top),
+                    iced::Size::new(erase_right - erase_left, erase_bottom - erase_top),
+                    self.background_color,
+                );
+            }
+
+            for (idx, &(_, draw_pos, _, in_exclude)) in affected_positions.iter().enumerate() {
+                if in_exclude { continue; }
+                let row_idx = idx / affected_cols;
+                let col_idx = idx % affected_cols;
+
+                // Horizontal → right neighbor (within affected area)
+                if col_idx + 1 < affected_cols {
+                    let (_, next_draw, _, next_ex) = affected_positions[idx + 1];
+                    if !next_ex {
+                        dynamic_frame.stroke(&Path::line(draw_pos, next_draw), grid_stroke.clone());
+                    }
+                } else if max_col < cols - 1 {
+                    // Right boundary: connect displaced dot to original outside dot
+                    let ox = (max_col + 1) as f32 * vs + fox;
+                    let oy = (min_row + row_idx as i32) as f32 * vs + foy;
+                    if !self.is_in_exclude_region(ox, oy) {
+                        dynamic_frame.stroke(&Path::line(draw_pos, Point::new(ox, oy)), grid_stroke.clone());
+                    }
+                }
+
+                // Left boundary: connect displaced dot to original outside dot
+                if col_idx == 0 && min_col > 0 {
+                    let ox = (min_col - 1) as f32 * vs + fox;
+                    let oy = (min_row + row_idx as i32) as f32 * vs + foy;
+                    if !self.is_in_exclude_region(ox, oy) {
+                        dynamic_frame.stroke(&Path::line(draw_pos, Point::new(ox, oy)), grid_stroke.clone());
+                    }
+                }
+
+                // Vertical ↓ bottom neighbor (within affected area)
+                if row_idx + 1 < affected_rows {
+                    let next_idx = idx + affected_cols;
+                    if next_idx < affected_positions.len() {
+                        let (_, next_draw, _, next_ex) = affected_positions[next_idx];
+                        if !next_ex {
+                            dynamic_frame.stroke(&Path::line(draw_pos, next_draw), grid_stroke.clone());
+                        }
+                    }
+                } else if max_row < rows - 1 {
+                    // Bottom boundary: connect displaced dot to original outside dot
+                    let ox = (min_col + col_idx as i32) as f32 * vs + fox;
+                    let oy = (max_row + 1) as f32 * vs + foy;
+                    if !self.is_in_exclude_region(ox, oy) {
+                        dynamic_frame.stroke(&Path::line(draw_pos, Point::new(ox, oy)), grid_stroke.clone());
+                    }
+                }
+
+                // Top boundary: connect displaced dot to original outside dot
+                if row_idx == 0 && min_row > 0 {
+                    let ox = (min_col + col_idx as i32) as f32 * vs + fox;
+                    let oy = (min_row - 1) as f32 * vs + foy;
+                    if !self.is_in_exclude_region(ox, oy) {
+                        dynamic_frame.stroke(&Path::line(draw_pos, Point::new(ox, oy)), grid_stroke.clone());
+                    }
+                }
             }
         }
 
