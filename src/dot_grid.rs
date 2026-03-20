@@ -21,6 +21,8 @@ pub struct DotGridState {
     box_select_end: Option<Point>,
     // Card connection drag
     connecting_from: Option<(usize, CardSide)>,
+    // Double-click detection for title editing
+    last_bar_click: Option<(usize, std::time::Instant)>, // (card_id, time)
 }
 
 impl Default for DotGridState {
@@ -39,6 +41,7 @@ impl Default for DotGridState {
             box_select_start: None,
             box_select_end: None,
             connecting_from: None,
+            last_bar_click: None,
         }
     }
 }
@@ -700,57 +703,125 @@ impl DotGrid {
         }
     }
 
-    /// Update the stored link positions for a Markdown card (called after content changes)
+    /// Update the stored link positions for a card (called after content changes).
+    /// Handles both Markdown links and [[card-ref]] syntax for all card types.
     pub fn update_card_link_positions(&mut self, card_id: usize) {
         use crate::text_processor::TextProcessor;
         use crate::card::CardType;
+        use crate::ref_parser;
 
         if let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) {
             card.link_positions.clear();
-            if card.card_type != CardType::Markdown || card.is_editing {
-                return;
-            }
-            let content = card.content.text();
+            if card.is_editing { return; }
+
+            let content = card.content.text().to_string();
             if content.is_empty() { return; }
 
             let top_bar_height = 30.0;
-            // Card-local origin (no canvas offset — applied at hit-test time)
             let text_x = card.current_position.x + 10.0;
             let text_y = card.current_position.y + top_bar_height + 10.0;
+            let char_width = self.font_size * 0.55;
+            let line_height = self.font_size * 1.5;
+            let max_width = card.width - 20.0;
+            let chars_per_line = (max_width / char_width).floor().max(1.0) as usize;
 
-            let processor = TextProcessor::with_font_size(self.font_size);
-            let document = processor.parse_full_markdown(&content);
+            match card.card_type {
+                CardType::Markdown => {
+                    // Preprocess [[ref]] → [ref](card-ref:ref) then parse as markdown
+                    let preprocessed = ref_parser::preprocess_refs_for_markdown(&content);
+                    let processor = TextProcessor::with_font_size(self.font_size);
+                    let document = processor.parse_full_markdown(&preprocessed);
 
-            let mut current_y = 0.0_f32;
-            for line in &document.lines {
-                if line.is_rule {
-                    current_y += line.spacing_before + 8.0 + line.spacing_after;
-                    continue;
+                    let mut current_y = 0.0_f32;
+                    for line in &document.lines {
+                        if line.is_rule {
+                            current_y += line.spacing_before + 8.0 + line.spacing_after;
+                            continue;
+                        }
+                        if line.is_empty() { current_y += 8.0; continue; }
+                        current_y += line.spacing_before;
+                        let max_size = line.segments.iter().map(|s| s.style.size)
+                            .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(14.0);
+                        let lh = 21.0 * (max_size / 14.0);
+                        let mut current_x = 0.0_f32;
+                        for seg in &line.segments {
+                            if let Some(url) = &seg.link_url {
+                                let cw = seg.style.size * 0.55;
+                                let seg_width = seg.text.chars().count() as f32 * cw;
+                                card.link_positions.push(crate::text_renderer::LinkPosition {
+                                    rect: iced::Rectangle {
+                                        x: text_x + line.indent + current_x,
+                                        y: text_y + current_y,
+                                        width: seg_width,
+                                        height: lh,
+                                    },
+                                    url: url.clone(),
+                                });
+                            }
+                            let cw = seg.style.size * 0.55;
+                            current_x += seg.text.chars().count() as f32 * cw;
+                        }
+                        current_y += lh + line.spacing_after;
+                    }
                 }
-                if line.is_empty() { current_y += 8.0; continue; }
-                current_y += line.spacing_before;
-                let max_size = line.segments.iter().map(|s| s.style.size)
-                    .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(14.0);
-                let line_height = 21.0 * (max_size / 14.0);
-                let mut current_x = 0.0_f32;
-                for seg in &line.segments {
-                    if let Some(url) = &seg.link_url {
-                        let char_width = seg.style.size * 0.55;
-                        let seg_width = seg.text.chars().count() as f32 * char_width;
+                CardType::Text => {
+                    // For plain text, detect [[ref]] patterns and compute positions
+                    let refs = ref_parser::parse_refs(&content);
+                    if refs.is_empty() { return; }
+
+                    // Walk through content character by character to compute screen pos
+                    // of each [[ref]] occurrence.
+                    let mut visual_col: usize = 0;  // chars on current visual line
+                    let mut visual_row: usize = 0;  // visual line index
+                    let mut byte_idx: usize = 0;
+
+                    // Build a map: byte_offset → (visual_row, visual_col)
+                    // by walking the content character by character with wrapping
+                    let mut byte_to_pos: Vec<(usize, usize)> = Vec::with_capacity(content.len());
+                    for ch in content.chars() {
+                        byte_to_pos.push((visual_row, visual_col));
+                        if ch == '\n' {
+                            visual_row += 1;
+                            visual_col = 0;
+                        } else {
+                            visual_col += 1;
+                            if visual_col >= chars_per_line {
+                                visual_row += 1;
+                                visual_col = 0;
+                            }
+                        }
+                        byte_idx += ch.len_utf8();
+                    }
+                    byte_to_pos.push((visual_row, visual_col)); // sentinel
+
+                    for (start, end, ref_text) in refs {
+                        if start >= byte_to_pos.len() { continue; }
+                        let (row, col) = byte_to_pos[start];
+                        let (end_row, end_col) = if end <= byte_to_pos.len() {
+                            byte_to_pos[end.min(byte_to_pos.len() - 1)]
+                        } else {
+                            (row, col + ref_text.len())
+                        };
+                        let rect_x = text_x + col as f32 * char_width;
+                        let rect_y = text_y + row as f32 * line_height;
+                        // Width: if single row, end_col - col; else rest of row
+                        let width = if end_row == row {
+                            (end_col.saturating_sub(col)) as f32 * char_width
+                        } else {
+                            (chars_per_line - col) as f32 * char_width
+                        };
                         card.link_positions.push(crate::text_renderer::LinkPosition {
                             rect: iced::Rectangle {
-                                x: text_x + line.indent + current_x,
-                                y: text_y + current_y,
-                                width: seg_width,
+                                x: rect_x,
+                                y: rect_y,
+                                width: width.max(char_width),
                                 height: line_height,
                             },
-                            url: url.clone(),
+                            url: ref_parser::encode_card_ref(ref_text),
                         });
                     }
-                    let char_width = seg.style.size * 0.55;
-                    current_x += seg.text.chars().count() as f32 * char_width;
                 }
-                current_y += line_height + line.spacing_after;
+                CardType::Image => {}
             }
         }
     }
@@ -1073,6 +1144,7 @@ pub enum DotGridMessage {
     DeleteConnection { from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide },
     ConnectionClick { from_card: usize, from_side: CardSide, to_card: usize, to_side: CardSide },
     CardCollapseToggle(usize),
+    CardTitleDoubleClick(usize),  // card_id — double-click on top bar center to edit title
 }
 
 impl Program<DotGridMessage> for &DotGrid {
@@ -1218,7 +1290,19 @@ impl Program<DotGridMessage> for &DotGrid {
                                                 Some(DotGridMessage::CardRightClickIcon(card.id)),
                                             );
                                         } else {
-                                            // Drag the card (blocked if pinned)
+                                            // Double-click on top bar center → title editing
+                                            let now = std::time::Instant::now();
+                                            let is_double = state.last_bar_click
+                                                .map(|(id, t)| id == card.id && now.duration_since(t).as_millis() < 350)
+                                                .unwrap_or(false);
+                                            state.last_bar_click = Some((card.id, now));
+                                            if is_double {
+                                                return (
+                                                    iced::widget::canvas::event::Status::Captured,
+                                                    Some(DotGridMessage::CardTitleDoubleClick(card.id)),
+                                                );
+                                            }
+                                            // Single click: drag the card (blocked if pinned)
                                             if !card.pinned {
                                                 state.dragging_card = Some(card.id);
                                                 state.drag_offset = Some(Point::new(

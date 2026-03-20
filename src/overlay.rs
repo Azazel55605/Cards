@@ -105,25 +105,10 @@ where
             );
         }
 
-        // Draw overlay layer on top.
-        // For modal overlays use with_layer(viewport) so the content always
-        // composites above every previously-drawn layer (sidebar, AppMenu etc.).
-        // For plain positioned overlays (card icons, toolbars) draw normally so
-        // the viewport is not clamped to a small/off-screen scissor rect.
+        // Always draw overlay in its own layer so it composites above CardLayer's with_layer() calls.
         if let Some(overlay_layout) = children.next() {
-            if self.modal {
-                renderer.with_layer(*viewport, |renderer| {
-                    self.overlay.as_widget().draw(
-                        &tree.children[1],
-                        renderer,
-                        theme,
-                        style,
-                        overlay_layout,
-                        cursor,
-                        viewport,
-                    );
-                });
-            } else {
+            let expanded_vp = viewport.union(&overlay_layout.bounds());
+            renderer.with_layer(expanded_vp, |renderer| {
                 self.overlay.as_widget().draw(
                     &tree.children[1],
                     renderer,
@@ -131,9 +116,9 @@ where
                     style,
                     overlay_layout,
                     cursor,
-                    viewport,
+                    &expanded_vp,
                 );
-            }
+            });
         }
     }
 

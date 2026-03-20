@@ -204,6 +204,9 @@ pub struct CardData {
     /// The expanded height to restore when uncollapsing. Defaults to 150.0 for old files.
     #[serde(default = "default_natural_height")]
     pub natural_height: f32,
+    /// Card title shown in the header bar. Defaults to empty string for old files.
+    #[serde(default)]
+    pub title: String,
 }
 
 fn default_card_type() -> String {
@@ -238,6 +241,7 @@ impl CardData {
             pinned: card.pinned,
             collapsed: card.collapsed,
             natural_height: card.natural_height,
+            title: card.title.clone(),
         }
     }
 

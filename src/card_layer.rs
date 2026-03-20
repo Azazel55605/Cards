@@ -34,6 +34,8 @@ pub struct CardLayer<'a> {
     selected_cards:       &'a HashSet<usize>,
     single_selected_card: Option<usize>,
     hovered_card:         Option<usize>,
+    // Card referencing
+    referenced_card_ids:  HashSet<usize>,
     // Connection rendering
     connections:          &'a [Connection],
     pending_conn:         Option<(usize, CardSide)>,
@@ -71,6 +73,7 @@ impl<'a> CardLayer<'a> {
             selected_cards,
             single_selected_card,
             hovered_card,
+            referenced_card_ids: HashSet::new(),
             connections: &[],
             pending_conn: None,
             pending_cursor: Point::ORIGIN,
@@ -78,6 +81,11 @@ impl<'a> CardLayer<'a> {
             conn_slot_anim: None,
             zoom: 1.0,
         }
+    }
+
+    pub fn with_references(mut self, ids: HashSet<usize>) -> Self {
+        self.referenced_card_ids = ids;
+        self
     }
 
     pub fn with_zoom(mut self, zoom: f32) -> Self {
@@ -143,6 +151,34 @@ impl<'a> CardLayer<'a> {
             let icon_data   = icon_util::icon_to_svg(card.icon.get_icondata());
             let left_handle = SvgHandle::from_memory(icon_data);
             frame.draw_svg(left_bounds, SvgDrawable::new(left_handle).color(card.color));
+
+            // Reference indicator: small chain icon when this card is referenced by another
+            let is_referenced = self.referenced_card_ids.contains(&card.id);
+            if is_referenced {
+                let ref_size = 12.0;
+                let ref_x = screen_x + 8.0 + icon_size + 3.0;
+                let ref_y = screen_y + (top_bar_height - ref_size) / 2.0;
+                let ref_bounds = Rectangle { x: ref_x, y: ref_y, width: ref_size, height: ref_size };
+                let ref_col = Color { a: 0.75, ..card.color };
+                let link_svg = icon_util::icon_to_svg(icondata_bs::BsLink45deg);
+                frame.draw_svg(ref_bounds, SvgDrawable::new(SvgHandle::from_memory(link_svg)).color(ref_col));
+            }
+
+            // Card title — centered in the top bar (between icons)
+            let title_center_x = screen_x + card.width / 2.0;
+            let title_center_y = screen_y + top_bar_height / 2.0;
+            if !card.title.is_empty() {
+                frame.fill_text(iced::widget::canvas::Text {
+                    content: card.title.clone(),
+                    position: Point::new(title_center_x, title_center_y),
+                    color: Color { a: 0.80, ..self.card_text },
+                    size: iced::Pixels(13.0),
+                    horizontal_alignment: iced::alignment::Horizontal::Center,
+                    vertical_alignment:   iced::alignment::Vertical::Center,
+                    font: self.font,
+                    ..Default::default()
+                });
+            }
 
             // Pin indicator — drawn to the left of the type icon when card is pinned
             let pin_offset = if card.pinned {
@@ -222,26 +258,49 @@ impl<'a> CardLayer<'a> {
 
                 match card.card_type {
                     CardType::Markdown => {
-                        let code_bg   = Color { a: 0.12, ..self.card_text };
+                        let code_bg = Color { a: 0.12, ..self.card_text };
                         let mut md_rr = MarkdownRenderer::with_fonts_size_height_and_link(
                             self.card_text, max_width, max_height, self.font, self.font_size, card.color,
                         );
                         md_rr.set_code_bg(code_bg);
-                        let _ = md_rr.render_as_markdown(frame, &content_text, Point::new(text_x, text_y));
+                        // Preprocess [[ref]] links into markdown link syntax
+                        let preprocessed = crate::ref_parser::preprocess_refs_for_markdown(&content_text);
+                        let _ = md_rr.render_as_markdown(frame, &preprocessed, Point::new(text_x, text_y));
                     }
                     CardType::Text => {
                         use crate::text_document::{TextDocument, TextLine, TextStyle};
                         use crate::text_renderer::TextRenderer;
+                        use crate::ref_parser;
                         let default_style = TextStyle::with_base_size(self.font_size);
+                        let link_style = TextStyle::with_base_size(self.font_size).with_link();
                         let mut doc = TextDocument::new();
                         for line in content_text.lines() {
                             let mut text_line = TextLine::new();
-                            text_line.add_segment(line.to_string(), default_style);
+                            let refs = ref_parser::parse_refs(line);
+                            if refs.is_empty() {
+                                text_line.add_segment(line.to_string(), default_style);
+                            } else {
+                                let mut last = 0;
+                                for (start, end, ref_text) in &refs {
+                                    if *start > last {
+                                        text_line.add_segment(line[last..*start].to_string(), default_style);
+                                    }
+                                    text_line.add_link_segment(
+                                        ref_text.to_string(),
+                                        link_style,
+                                        ref_parser::encode_card_ref(ref_text),
+                                    );
+                                    last = *end;
+                                }
+                                if last < line.len() {
+                                    text_line.add_segment(line[last..].to_string(), default_style);
+                                }
+                            }
                             doc.add_line(text_line);
                         }
                         let tr = TextRenderer::with_fonts_and_height(
                             self.card_text, max_width, max_height, self.font, self.font,
-                        );
+                        ).with_link_color(card.color);
                         let _ = tr.render(frame, &doc, Point::new(text_x, text_y));
                     }
                     CardType::Image => unreachable!(),

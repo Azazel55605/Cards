@@ -31,6 +31,7 @@ mod import_export_modal;
 mod zoom_bar;
 mod minimap_overlay;
 mod save_worker;
+mod ref_parser;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -56,12 +57,15 @@ use workspace::{WorkspaceFile, BoardData, CardData, ConnectionData};
 use workspace_modal::{WorkspaceModalState, WorkspaceModalMessage};
 use file_picker::{FilePickerState, FilePickerMessage, FilePickerMode};
 use import_export_modal::{ImportExportState, ImportExportMessage, IEKind, ImportExportResult};
-use card_toolbar::{CardToolbar, ToolbarItem};
 use card_layer::CardLayer;
 use card_shelf::{CardShelf, SHELF_HEIGHT, GHOST_CARD_W, GHOST_TOP_BAR_H};
 use zoom_bar::ZoomBar;
 use minimap_overlay::{MinimapOverlay, MinimapCard, MinimapConn};
 use save_worker::SaveWorker;
+
+fn title_input_id() -> text_input::Id {
+    text_input::Id::new("card_title_input")
+}
 
 // Application constants (not user-configurable)
 const SIDEBAR_WIDTH: f32 = 250.0;
@@ -312,6 +316,34 @@ pub enum Message {
     // Board drag-drop
     DragBoardHover(Option<usize>),
     MoveDraggedCardToBoard(usize),
+    // Card title editing
+    TitleInputChanged(String),
+    ConfirmCardTitle,
+    // Card reference navigation
+    JumpToCard { board_idx: usize, card_id: usize },
+    JumpBack,
+    // Ref autocomplete
+    RefAutocompleteMove(i32),
+    RefAutocompleteSelect,
+    RefAutocompleteClose,
+}
+
+/// A candidate card match shown in the ref autocomplete dropdown.
+#[derive(Debug, Clone)]
+struct RefCandidate {
+    board_idx:  usize,
+    board_name: String,
+    card_id:    usize,
+    card_title: String,
+}
+
+/// State of the [[ref]] autocomplete popup.
+#[derive(Debug, Clone)]
+struct RefAutocomplete {
+    card_id:      usize,
+    query:        String,
+    candidates:   Vec<RefCandidate>,
+    selected_idx: usize,
 }
 
 struct Cards {
@@ -433,6 +465,12 @@ struct Cards {
     // Board drag-drop
     card_drag_in_progress: Option<usize>,
     drag_target_board: Option<usize>,
+    // Jump / back navigation (offset, zoom, board_idx)
+    jump_history: Vec<(Vector, f32, usize)>,
+    /// Target offset for animated canvas pan (used by JumpToCard and Ctrl+0)
+    canvas_animation_target: Vector,
+    // [[ref]] autocomplete
+    ref_autocomplete: Option<RefAutocomplete>,
 }
 
 const SIDEBAR_HIDDEN_OFFSET: f32 = -280.0;
@@ -580,6 +618,9 @@ impl Cards {
             shelf_drag: None,
             card_drag_in_progress: None,
             drag_target_board: None,
+            jump_history: Vec::new(),
+            canvas_animation_target: Vector::new(0.0, 0.0),
+            ref_autocomplete: None,
         };
         cards.update_exclude_region();
 
@@ -818,14 +859,14 @@ impl Cards {
                     if self.canvas_animation_progress >= 1.0 {
                         self.canvas_animation_progress = 1.0;
                         self.canvas_animating = false;
-                        self.canvas_offset = Vector::new(0.0, 0.0);
+                        self.canvas_offset = self.canvas_animation_target;
                         self.canvas_position_dirty = true;
                     } else {
                         let t = self.canvas_animation_progress;
                         // Use ease-out cubic for smooth deceleration
                         let eased = 1.0 - (1.0 - t).powi(3);
 
-                        let target = Vector::new(0.0, 0.0);
+                        let target = self.canvas_animation_target;
                         self.canvas_offset.x = self.canvas_animation_start.x + (target.x - self.canvas_animation_start.x) * eased;
                         self.canvas_offset.y = self.canvas_animation_start.y + (target.y - self.canvas_animation_start.y) * eased;
                     }
@@ -1326,8 +1367,31 @@ impl Cards {
                         }
                     }
                     DotGridMessage::LinkClick(url) => {
-                        // Open URL in default browser, ignore errors silently
-                        let _ = open::that(&url);
+                        if let Some(ref_text) = ref_parser::decode_card_ref(&url) {
+                            // Resolve card reference and jump to it
+                            if let Some((board_idx, card_id)) = self.resolve_card_ref(ref_text) {
+                                return Task::done(Message::JumpToCard { board_idx, card_id });
+                            }
+                        } else {
+                            // Open regular URL in default browser
+                            let _ = open::that(&url);
+                        }
+                    }
+                    DotGridMessage::CardTitleDoubleClick(card_id) => {
+                        // Stop content editing if active
+                        if let Some(eid) = self.editing_card_id {
+                            if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == eid) {
+                                card.is_editing = false;
+                            }
+                            self.editing_card_id = None;
+                        }
+                        // Select this card to show the toolbar (which has the title input)
+                        self.selected_card_ids.clear();
+                        self.dot_grid.clear_selected_cards();
+                        self.selected_card_id = Some(card_id);
+                        self.dot_grid.set_single_selected_card(Some(card_id));
+                        // Focus the title input field in the toolbar
+                        return text_input::focus(title_input_id());
                     }
                     DotGridMessage::BoxSelectEnd(rect) => {
                         self.selected_conn = None;
@@ -1755,6 +1819,7 @@ impl Cards {
                         if self.config.general.enable_animations {
                             self.canvas_animating = true;
                             self.canvas_animation_start = self.canvas_offset;
+                            self.canvas_animation_target = Vector::new(0.0, 0.0);
                             self.canvas_animation_progress = 0.0;
                         } else {
                             self.canvas_offset = Vector::new(0.0, 0.0);
@@ -1954,6 +2019,28 @@ impl Cards {
                     }
                 }
                 
+                // When autocomplete is open, intercept navigation keys before the text editor
+                if self.ref_autocomplete.is_some() {
+                    if let iced::keyboard::Event::KeyPressed { key, .. } = &keyboard_event {
+                        use iced::keyboard::Key;
+                        match key {
+                            Key::Named(iced::keyboard::key::Named::Tab) => {
+                                return Task::done(Message::RefAutocompleteSelect);
+                            }
+                            Key::Named(iced::keyboard::key::Named::Escape) => {
+                                return Task::done(Message::RefAutocompleteClose);
+                            }
+                            Key::Named(iced::keyboard::key::Named::ArrowUp) => {
+                                return Task::done(Message::RefAutocompleteMove(-1));
+                            }
+                            Key::Named(iced::keyboard::key::Named::ArrowDown) => {
+                                return Task::done(Message::RefAutocompleteMove(1));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 // Handle keyboard input for editing card
                 if let Some(card_id) = self.editing_card_id {
                     if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
@@ -2197,6 +2284,23 @@ impl Cards {
                             _ => {}
                         }
                     }
+
+                    // After each key: check if cursor is inside a [[... pattern → show autocomplete
+                    if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
+                        let content = card.content.text().to_string();
+                        let cursor  = card.content.cursor_position;
+                        if let Some((_, query)) = ref_parser::ref_query_at_cursor(&content, cursor) {
+                            let candidates = self.collect_ref_candidates(&query);
+                            self.ref_autocomplete = Some(RefAutocomplete {
+                                card_id,
+                                query,
+                                candidates,
+                                selected_idx: 0,
+                            });
+                        } else {
+                            self.ref_autocomplete = None;
+                        }
+                    }
                 }
             }
             Message::StopEditingCard => {
@@ -2207,6 +2311,7 @@ impl Cards {
                 }
                 self.editing_card_id = None;
                 self.selected_card_id = None;
+                self.ref_autocomplete = None;
                 self.dot_grid.set_single_selected_card(None);
                 self.dot_grid.clear_cards_cache();
             }
@@ -2552,6 +2657,7 @@ impl Cards {
                 if self.config.general.enable_animations {
                     self.canvas_animating = true;
                     self.canvas_animation_start = self.canvas_offset;
+                    self.canvas_animation_target = Vector::new(0.0, 0.0);
                     self.canvas_animation_progress = 0.0;
                 } else {
                     self.canvas_offset = Vector::new(0.0, 0.0);
@@ -3003,6 +3109,126 @@ impl Cards {
                 self.card_drag_in_progress = None;
                 self.drag_target_board = None;
             }
+            // ── Card title editing ────────────────────────────────────────────
+            Message::TitleInputChanged(text) => {
+                if let Some(card_id) = self.selected_card_id {
+                    if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
+                        card.title = text;
+                        self.dot_grid.clear_cards_cache();
+                        self.workspace_dirty = true;
+                    }
+                }
+            }
+            Message::ConfirmCardTitle => {
+                // Title is updated live via TitleInputChanged; this just dismisses keyboard focus
+            }
+            // ── Card reference navigation ─────────────────────────────────────
+            Message::JumpToCard { board_idx, card_id } => {
+                // Push current state so we can jump back
+                self.jump_history.push((self.canvas_offset, self.canvas_zoom, self.active_board_index));
+
+                if board_idx != self.active_board_index {
+                    self.save_current_board_cards();
+                    self.editing_card_id = None;
+                    self.selected_card_id = None;
+                    self.active_board_index = board_idx;
+                    let new_cards = self.board_cards.get(&board_idx).cloned().unwrap_or_default();
+                    self.load_cards_with_positions(new_cards);
+                }
+
+                // Compute target offset to centre the card in the viewport
+                let target_offset = if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
+                    let card_cx = card.current_position.x + card.width  / 2.0;
+                    let card_cy = card.current_position.y + card.height / 2.0;
+                    let vp_cx = self.window_size.width  / 2.0;
+                    let vp_cy = self.window_size.height / 2.0;
+                    Vector::new(vp_cx - card_cx, vp_cy - card_cy)
+                } else {
+                    self.canvas_offset
+                };
+
+                if self.config.general.enable_animations {
+                    self.canvas_animating = true;
+                    self.canvas_animation_start = self.canvas_offset;
+                    self.canvas_animation_target = target_offset;
+                    self.canvas_animation_progress = 0.0;
+                } else {
+                    self.canvas_offset = target_offset;
+                    self.dot_grid.set_offset(self.canvas_offset);
+                    self.canvas_position_dirty = true;
+                }
+
+                // Highlight the target card
+                self.selected_card_ids.clear();
+                self.dot_grid.clear_selected_cards();
+                self.selected_card_id = Some(card_id);
+                self.dot_grid.set_single_selected_card(Some(card_id));
+                self.dot_grid.clear_cards_cache();
+            }
+            Message::JumpBack => {
+                if let Some((saved_offset, saved_zoom, saved_board)) = self.jump_history.pop() {
+                    if saved_board != self.active_board_index {
+                        self.save_current_board_cards();
+                        self.editing_card_id = None;
+                        self.selected_card_id = None;
+                        self.active_board_index = saved_board;
+                        let new_cards = self.board_cards.get(&saved_board).cloned().unwrap_or_default();
+                        self.load_cards_with_positions(new_cards);
+                    }
+                    self.canvas_zoom = saved_zoom;
+                    self.dot_grid.set_zoom(saved_zoom);
+                    if self.config.general.enable_animations {
+                        self.canvas_animating = true;
+                        self.canvas_animation_start = self.canvas_offset;
+                        self.canvas_animation_target = saved_offset;
+                        self.canvas_animation_progress = 0.0;
+                    } else {
+                        self.canvas_offset = saved_offset;
+                        self.dot_grid.set_offset(self.canvas_offset);
+                        self.canvas_position_dirty = true;
+                    }
+                }
+            }
+            // ── Ref autocomplete ──────────────────────────────────────────────
+            Message::RefAutocompleteMove(delta) => {
+                if let Some(ref mut ac) = self.ref_autocomplete {
+                    let len = ac.candidates.len();
+                    if len > 0 {
+                        let new_idx = (ac.selected_idx as i32 + delta).rem_euclid(len as i32) as usize;
+                        ac.selected_idx = new_idx;
+                    }
+                }
+            }
+            Message::RefAutocompleteSelect => {
+                if let Some(ac) = self.ref_autocomplete.take() {
+                    if let Some(candidate) = ac.candidates.get(ac.selected_idx).cloned() {
+                        if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == ac.card_id) {
+                            let content = card.content.text().to_string();
+                            let cursor = card.content.cursor_position;
+                            if let Some((bracket_pos, _)) = ref_parser::ref_query_at_cursor(&content, cursor) {
+                                let board_name = if candidate.board_idx != self.active_board_index {
+                                    Some(candidate.board_name.as_str())
+                                } else {
+                                    None
+                                };
+                                let ref_str = ref_parser::format_ref(board_name, &candidate.card_title);
+                                let mut new_text = content[..bracket_pos].to_string();
+                                new_text.push_str(&ref_str);
+                                let new_cursor = new_text.len();
+                                new_text.push_str(&content[cursor..]);
+                                card.content.set_text(new_text);
+                                card.content.cursor_position = new_cursor;
+                                self.dot_grid.clear_cards_cache();
+                                self.workspace_dirty = true;
+                            }
+                        }
+                    }
+                }
+                self.ref_autocomplete = None;
+            }
+            Message::RefAutocompleteClose => {
+                self.ref_autocomplete = None;
+            }
         }
 
         // Mark dirty and note the time — actual saves are triggered by the Tick handler.
@@ -3291,6 +3517,7 @@ impl Cards {
                 card.pinned = cd.pinned;
                 card.collapsed = cd.collapsed;
                 card.natural_height = cd.natural_height;
+                card.title = cd.title.clone();
                 card.width = cd.width;
                 card.height = if cd.collapsed { 30.0 } else { cd.height };
                 card.target_width = cd.width;
@@ -3402,6 +3629,59 @@ impl Cards {
                 println!("DEBUG: Workspace queued for save to {:?}", path);
             }
         }
+    }
+
+    /// Resolve a `[[ref text]]` string to `(board_idx, card_id)`.
+    fn resolve_card_ref(&self, ref_text: &str) -> Option<(usize, usize)> {
+        let (board_name_opt, card_title) = ref_parser::parse_ref_parts(ref_text);
+        if let Some(board_name) = board_name_opt {
+            let board_idx = self.boards.iter().position(|b| b == board_name)?;
+            let cards: Vec<card::Card> = if board_idx == self.active_board_index {
+                self.dot_grid.cards().to_vec()
+            } else {
+                self.board_cards.get(&board_idx).cloned().unwrap_or_default()
+            };
+            cards.iter().find(|c| c.title == card_title).map(|c| (board_idx, c.id))
+        } else {
+            for board_idx in 0..self.boards.len() {
+                let cards: Vec<card::Card> = if board_idx == self.active_board_index {
+                    self.dot_grid.cards().to_vec()
+                } else {
+                    self.board_cards.get(&board_idx).cloned().unwrap_or_default()
+                };
+                if let Some(c) = cards.iter().find(|c| c.title == card_title) {
+                    return Some((board_idx, c.id));
+                }
+            }
+            None
+        }
+    }
+
+    /// Collect all cards with non-empty titles that match the query for autocomplete.
+    fn collect_ref_candidates(&self, query: &str) -> Vec<RefCandidate> {
+        let query_lower = query.to_lowercase();
+        let mut candidates = Vec::new();
+        for board_idx in 0..self.boards.len() {
+            let board_name = self.boards[board_idx].clone();
+            let cards: Vec<card::Card> = if board_idx == self.active_board_index {
+                self.dot_grid.cards().to_vec()
+            } else {
+                self.board_cards.get(&board_idx).cloned().unwrap_or_default()
+            };
+            for c in &cards {
+                if !c.title.is_empty() {
+                    if query_lower.is_empty() || c.title.to_lowercase().contains(&query_lower) {
+                        candidates.push(RefCandidate {
+                            board_idx,
+                            board_name: board_name.clone(),
+                            card_id:    c.id,
+                            card_title: c.title.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        candidates
     }
 
     fn handle_import_export_message(&mut self, msg: ImportExportMessage) {
@@ -3817,6 +4097,22 @@ impl Cards {
 
         let canvas: Element<Message> = self.dot_grid.view().map(Message::DotGridMessage);
 
+        // Compute which card IDs are referenced by any card on the current board.
+        let referenced_card_ids: std::collections::HashSet<usize> = {
+            let mut ids = std::collections::HashSet::new();
+            for card in self.dot_grid.cards() {
+                for (_, _, ref_text) in ref_parser::parse_refs(card.content.text()) {
+                    let (_, title) = ref_parser::parse_ref_parts(ref_text);
+                    for c in self.dot_grid.cards() {
+                        if c.title == title && !title.is_empty() {
+                            ids.insert(c.id);
+                        }
+                    }
+                }
+            }
+            ids
+        };
+
         // CardLayer renders each card in its own compositor layer (renderer.with_layer)
         // so text/SVGs composite correctly with fills — fixing the z-ordering issue.
         let card_layer: Element<Message> = CardLayer::new(
@@ -3831,7 +4127,8 @@ impl Cards {
             self.dot_grid.selected_cards(),
             self.dot_grid.single_selected_card(),
             self.dot_grid.hovered_card(),
-        ).with_connections(
+        ).with_references(referenced_card_ids)
+        .with_connections(
             self.dot_grid.connections(),
             self.dot_grid.pending_conn(),
             self.dot_grid.pending_cursor(),
@@ -3954,33 +4251,14 @@ impl Cards {
         // Icons are now drawn directly inside the canvas in draw_cards(), so they
         // z-order correctly with overlapping cards — no widget overlays needed here.
 
-        // Add card toolbar (before sidebar) - shown when a card is selected
+        // ── Card toolbar: title input + action buttons ────────────────────────
         if let Some(card_id) = self.selected_card_id {
             if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == card_id) {
                 let card_type = card.card_type;
+                let card_title = card.title.clone();
+                let card_is_pinned = card.pinned;
 
-                let mut items: Vec<ToolbarItem<Message>> = Vec::new();
-                if card_type == CardType::Markdown {
-                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_bold.clone(),          message: Message::FormatBold });
-                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_italic.clone(),        message: Message::FormatItalic });
-                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_strikethrough.clone(), message: Message::FormatStrikethrough });
-                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_code.clone(),          message: Message::FormatCode });
-                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_codeblock.clone(),     message: Message::FormatCodeBlock });
-                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_heading.clone(),       message: Message::FormatHeading });
-                    items.push(ToolbarItem::Icon { handle: self.icon_fmt_bullet.clone(),        message: Message::FormatBullet });
-                    items.push(ToolbarItem::Separator);
-                }
-                let pin_handle = if card.pinned { self.icon_pin_fill.clone() } else { self.icon_pin.clone() };
-                items.push(ToolbarItem::Icon { handle: pin_handle, message: Message::TogglePinCard(card_id) });
-                items.push(ToolbarItem::Separator);
-                items.push(ToolbarItem::Icon { handle: self.icon_duplicate.clone(), message: Message::DuplicateCard(card_id) });
-                items.push(ToolbarItem::Icon { handle: self.icon_delete.clone(),    message: Message::DeleteCard(card_id) });
-
-                let pill_w = CardToolbar::<Message>::measure_width(&items);
-                let pill_h = CardToolbar::<Message>::pill_height();
-
-                // Apply zoom transform: zoom-1 screen pos → actual screen pos
-                let z = self.canvas_zoom;
+                let z   = self.canvas_zoom;
                 let vcx = self.window_size.width  / 2.0;
                 let vcy = self.window_size.height / 2.0;
                 let zoom1_x = card.current_position.x + self.canvas_offset.x;
@@ -3989,24 +4267,147 @@ impl Cards {
                 let card_screen_y = vcy + (zoom1_y - vcy) * z;
                 let card_width_z  = card.width * z;
 
-                // Centre above card, clamped to window
+                let ct = self.dot_grid.card_text();
+                let ac = self.accent_color;
+                let pill_bg     = self.theme.sidebar_background();
+                let pill_border = self.theme.button_border();
+                let btn_hover   = self.theme.accent_bg_from(self.accent_color);
+                let btn_text    = self.theme.button_text();
+
+                // ── icon button helper ──────────────────────────────────────────
+                let mk_btn = |handle: svg::Handle, msg: Message| -> Element<Message> {
+                    button(
+                        container(
+                            svg(handle).width(18).height(18).class(SvgStyle { color: icon_color })
+                        )
+                        .width(32)
+                        .height(32)
+                        .align_x(Alignment::Center)
+                        .align_y(Alignment::Center),
+                    )
+                    .style(move |_theme, status| {
+                        let bg = if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                            btn_hover
+                        } else {
+                            Color::TRANSPARENT
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            border: iced::Border { color: Color::TRANSPARENT, width: 0.0, radius: 6.0.into() },
+                            text_color: btn_text,
+                            shadow: iced::Shadow::default(),
+                        }
+                    })
+                    .padding(0)
+                    .on_press(msg)
+                    .into()
+                };
+
+                // ── vertical separator ──────────────────────────────────────────
+                let vsep = || -> Element<Message> {
+                    container(Space::new(1, 20))
+                        .style(move |_: &iced::Theme| iced::widget::container::Style {
+                            background: Some(iced::Background::Color(Color { a: 0.25, ..pill_border })),
+                            ..Default::default()
+                        })
+                        .into()
+                };
+
+                // ── horizontal separator ────────────────────────────────────────
+                let hsep = || -> Element<Message> {
+                    container(Space::new(Length::Fill, 1))
+                        .width(Length::Fill)
+                        .style(move |_: &iced::Theme| iced::widget::container::Style {
+                            background: Some(iced::Background::Color(Color { a: 0.20, ..pill_border })),
+                            ..Default::default()
+                        })
+                        .into()
+                };
+
+                // ── title input ─────────────────────────────────────────────────
+                let title_row: Element<Message> =
+                    text_input("Add title\u{2026}", &card_title)
+                        .id(title_input_id())
+                        .on_input(Message::TitleInputChanged)
+                        .on_submit(Message::ConfirmCardTitle)
+                        .width(Length::Fill)
+                        .size(13.0)
+                        .padding(Padding { top: 6.0, right: 10.0, bottom: 6.0, left: 10.0 })
+                        .style(move |_theme, _status| iced::widget::text_input::Style {
+                            background: iced::Background::Color(Color::TRANSPARENT),
+                            border: iced::Border { color: Color::TRANSPARENT, width: 0.0, radius: 0.0.into() },
+                            icon:        ct,
+                            placeholder: Color { a: 0.30, ..ct },
+                            value:       ct,
+                            selection:   Color { a: 0.28, ..ac },
+                        })
+                        .into();
+
+                // ── action buttons ──────────────────────────────────────────────
+                let pin_handle = if card_is_pinned { self.icon_pin_fill.clone() } else { self.icon_pin.clone() };
+
+                let mut action_items: Vec<Element<Message>> = Vec::new();
+
+                if card_type == CardType::Markdown {
+                    action_items.push(mk_btn(self.icon_fmt_bold.clone(),          Message::FormatBold));
+                    action_items.push(mk_btn(self.icon_fmt_italic.clone(),        Message::FormatItalic));
+                    action_items.push(mk_btn(self.icon_fmt_strikethrough.clone(), Message::FormatStrikethrough));
+                    action_items.push(mk_btn(self.icon_fmt_code.clone(),          Message::FormatCode));
+                    action_items.push(mk_btn(self.icon_fmt_codeblock.clone(),     Message::FormatCodeBlock));
+                    action_items.push(mk_btn(self.icon_fmt_heading.clone(),       Message::FormatHeading));
+                    action_items.push(mk_btn(self.icon_fmt_bullet.clone(),        Message::FormatBullet));
+                    action_items.push(vsep());
+                }
+                action_items.push(mk_btn(pin_handle,                    Message::TogglePinCard(card_id)));
+                action_items.push(vsep());
+                action_items.push(mk_btn(self.icon_duplicate.clone(),   Message::DuplicateCard(card_id)));
+                action_items.push(mk_btn(self.icon_delete.clone(),      Message::DeleteCard(card_id)));
+
+                let actions_row: Element<Message> = container(
+                    iced::widget::Row::with_children(action_items).spacing(2).align_y(Alignment::Center)
+                )
+                .padding(Padding { top: 4.0, right: 6.0, bottom: 4.0, left: 6.0 })
+                .align_x(iced::alignment::Horizontal::Center)
+                .width(Length::Fill)
+                .into();
+
+                // ── combined pill ───────────────────────────────────────────────
+                // Size to content: markdown needs ~356px for all buttons; text cards use
+                // a 200px minimum so the title input has comfortable width.
+                let pill_w = (if card_type == CardType::Markdown { 370.0_f32 } else { 200.0_f32 })
+                    .min(self.window_size.width - 20.0);
+
+                let pill: Element<Message> = container(
+                    column![title_row, hsep(), actions_row]
+                )
+                .width(pill_w)
+                .style(move |_: &iced::Theme| iced::widget::container::Style {
+                    background: Some(iced::Background::Color(pill_bg)),
+                    border: iced::Border {
+                        color: pill_border,
+                        width: 1.0,
+                        radius: 10.0.into(),
+                    },
+                    shadow: iced::Shadow {
+                        color: Color::from_rgba(0.0, 0.0, 0.0, 0.30),
+                        offset: iced::Vector::new(0.0, 4.0),
+                        blur_radius: 14.0,
+                    },
+                    ..Default::default()
+                })
+                .into();
+
+                // Position centred above the card; approximate height: title(~33) + sep(1) + actions(~40) + borders(2) ≈ 76px
+                // Add 12px gap so the pill floats visibly above the card top bar
+                let approx_h = 76.0_f32 + 12.0;
                 let mut pill_x = card_screen_x + card_width_z / 2.0 - pill_w / 2.0;
-                let mut pill_y = card_screen_y - pill_h - 8.0;
+                let mut pill_y = card_screen_y - approx_h - 8.0;
                 pill_x = pill_x.max(8.0).min((self.window_size.width - pill_w - 8.0).max(8.0));
                 pill_y = pill_y.max(8.0);
 
-                let toolbar: Element<Message> = CardToolbar::new(
-                    items,
-                    Point::new(pill_x, pill_y),
-                    self.theme.sidebar_background(),
-                    self.theme.button_border(),
-                    self.theme.sidebar_shadow(),
-                    self.theme.icon_color(),
-                    self.theme.accent_bg_from(self.accent_color),
-                    self.theme.button_text(),
-                ).into();
-
-                view = Overlay::new(view, toolbar).into();
+                use positioned::Positioned;
+                let positioned_pill: Element<Message> = Positioned::new(pill, Point::new(pill_x, pill_y)).into();
+                view = Overlay::new(view, positioned_pill).into();
             }
         }
 
@@ -4043,6 +4444,120 @@ impl Cards {
                 .into();
                 view = Overlay::new(view, type_menu).into();
             }
+        }
+
+        // ── Autocomplete dropdown ─────────────────────────────────────────
+        if let Some(ref ac) = self.ref_autocomplete {
+            if !ac.candidates.is_empty() {
+                if let Some(card) = self.dot_grid.cards().iter().find(|c| c.id == ac.card_id) {
+                    let z  = self.canvas_zoom;
+                    let vcx = self.window_size.width  / 2.0;
+                    let vcy = self.window_size.height / 2.0;
+                    let zoom1_x = card.current_position.x + self.canvas_offset.x;
+                    let zoom1_y = card.current_position.y + self.canvas_offset.y;
+                    let card_sx = vcx + (zoom1_x - vcx) * z;
+                    let card_sy = vcy + (zoom1_y - vcy) * z;
+                    // Position below the top bar
+                    let drop_x = card_sx + 8.0;
+                    let drop_y = card_sy + 30.0 * z + 4.0;
+                    let drop_w = (card.width * z - 16.0).max(120.0);
+
+                    let item_h = 28.0_f32;
+                    let max_visible = 6usize;
+                    let visible = ac.candidates.len().min(max_visible);
+                    let drop_h = item_h * visible as f32 + 8.0;
+
+                    let mut drop_col = iced::widget::column![];
+                    for (i, candidate) in ac.candidates.iter().take(max_visible).enumerate() {
+                        let is_selected = i == ac.selected_idx;
+                        let label = if candidate.board_idx == self.active_board_index {
+                            candidate.card_title.clone()
+                        } else {
+                            format!("{} / {}", candidate.board_name, candidate.card_title)
+                        };
+                        let row_bg = if is_selected { accent_bg } else { sidebar_bg };
+                        let row_text_color = self.theme.button_text();
+                        let row: Element<Message> = container(
+                            text(label).size(12).color(row_text_color)
+                        )
+                        .width(drop_w)
+                        .height(item_h)
+                        .padding(iced::Padding { top: 6.0, right: 8.0, bottom: 6.0, left: 8.0 })
+                        .style(move |_theme: &iced::Theme| {
+                            iced::widget::container::Style {
+                                background: Some(iced::Background::Color(row_bg)),
+                                border: iced::Border { color: Color::TRANSPARENT, width: 0.0, radius: 4.0.into() },
+                                ..Default::default()
+                            }
+                        })
+                        .into();
+                        drop_col = drop_col.push(row);
+                    }
+
+                    let dropdown: Element<Message> = container(
+                        container(drop_col)
+                            .padding(iced::Padding::new(4.0))
+                    )
+                    .width(drop_w)
+                    .height(drop_h)
+                    .style(move |_theme: &iced::Theme| {
+                        iced::widget::container::Style {
+                            background: Some(iced::Background::Color(sidebar_bg)),
+                            border: iced::Border { color: self.theme.button_border(), width: 1.0, radius: 6.0.into() },
+                            shadow: iced::Shadow {
+                                color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                                offset: iced::Vector::new(0.0, 2.0),
+                                blur_radius: 8.0,
+                            },
+                            ..Default::default()
+                        }
+                    })
+                    .into();
+
+                    use positioned::Positioned;
+                    let positioned_drop: Element<Message> =
+                        Positioned::new(dropdown, Point::new(drop_x, drop_y)).into();
+                    view = Overlay::new(view, positioned_drop)
+                        .modal()
+                        .on_backdrop_press(Message::RefAutocompleteClose)
+                        .into();
+                }
+            }
+        }
+
+        // ── Jump-back navigation button ───────────────────────────────────
+        if !self.jump_history.is_empty() {
+            let back_btn: Element<Message> = button(
+                container(text("← Back").size(13).color(self.theme.button_text()))
+                    .padding(iced::Padding { top: 6.0, right: 14.0, bottom: 6.0, left: 14.0 })
+                    .style(move |_theme: &iced::Theme| {
+                        iced::widget::container::Style {
+                            background: Some(iced::Background::Color(sidebar_bg)),
+                            border: iced::Border { color: self.theme.button_border(), width: 1.0, radius: 20.0.into() },
+                            shadow: iced::Shadow {
+                                color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                                offset: iced::Vector::new(0.0, 2.0),
+                                blur_radius: 8.0,
+                            },
+                            ..Default::default()
+                        }
+                    })
+            )
+            .on_press(Message::JumpBack)
+            .style(|_theme, _status| iced::widget::button::Style {
+                background: None,
+                border: iced::Border::default(),
+                shadow: iced::Shadow::default(),
+                text_color: Color::TRANSPARENT,
+            })
+            .into();
+
+            use positioned::Positioned;
+            let back_x = self.window_size.width / 2.0 - 40.0;
+            let back_y = self.window_size.height - 100.0;
+            let positioned_back: Element<Message> =
+                Positioned::new(back_btn, Point::new(back_x, back_y)).into();
+            view = Overlay::new(view, positioned_back).into();
         }
 
         // Build sidebar content with title

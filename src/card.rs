@@ -185,6 +185,8 @@ pub struct Card {
     pub image_data:   Option<Arc<Vec<u8>>>,
     pub image_is_svg: bool,
     pub image_handle: Option<CardImageHandle>,
+    /// Optional card title shown in the header bar.
+    pub title: String,
 }
 
 impl Clone for Card {
@@ -211,6 +213,7 @@ impl Clone for Card {
             image_data:   self.image_data.clone(),
             image_is_svg: self.image_is_svg,
             image_handle: self.image_handle.clone(),
+            title: self.title.clone(),
         }
     }
 }
@@ -713,6 +716,7 @@ impl Card {
             image_data:   None,
             image_is_svg: false,
             image_handle: None,
+            title: String::new(),
         }
     }
 
