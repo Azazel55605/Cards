@@ -55,7 +55,6 @@ impl MarkdownParser {
         let mut code_block_lang: Option<String> = None;
         let mut code_block_content = String::new();
         let mut checkbox_counter = 0;
-        let mut in_link = false;
         let mut current_link_url: Option<String> = None;
 
         for event in parser {
@@ -95,7 +94,6 @@ impl MarkdownParser {
                         }
                         Tag::Link(_, url, _) => {
                             self.flush_text_to_line(&mut current_line, &mut text_buffer, &current_style);
-                            in_link = true;
                             current_link_url = Some(url.to_string());
                             current_style = current_style.with_link();
                         }
@@ -166,7 +164,6 @@ impl MarkdownParser {
                                 }
                                 text_buffer.clear();
                             }
-                            in_link = false;
                             current_link_url = None;
                             current_style = TextStyle {
                                 is_link: false,

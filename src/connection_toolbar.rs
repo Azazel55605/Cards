@@ -233,7 +233,7 @@ impl<Message: Clone + 'static> Widget<Message, iced::Theme, iced::Renderer>
             let mut frame = Frame::new(&*renderer, bounds.size());
 
             for (i, btn) in btns.iter().enumerate() {
-                let cx = btn.x + BTN_SZ / 2.0;
+                let _cx = btn.x + BTN_SZ / 2.0;
                 let cy = btn.y + BTN_SZ / 2.0;
                 let hovered = state.hovered == Some(i);
 

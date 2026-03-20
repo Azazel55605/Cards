@@ -260,7 +260,7 @@ impl<Message: Clone + 'static> Widget<Message, iced::Theme, iced::Renderer>
         let state = tree.state.downcast_ref::<CardToolbarState>();
         let rects = self.item_rects();
         if let Some(pos) = cursor.position() {
-            for (i, (rect, item)) in rects.iter().zip(self.items.iter()).enumerate() {
+            for (_i, (rect, item)) in rects.iter().zip(self.items.iter()).enumerate() {
                 if rect.contains(pos) && !matches!(item, ToolbarItem::Separator) {
                     return mouse::Interaction::Pointer;
                 }

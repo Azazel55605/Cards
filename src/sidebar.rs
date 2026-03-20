@@ -1,5 +1,5 @@
 use iced::advanced::layout::{self, Layout};
-use iced::advanced::renderer::{self, Renderer as _};
+use iced::advanced::renderer::{self};
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::gradient;

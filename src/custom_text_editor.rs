@@ -608,7 +608,7 @@ impl CustomTextEditor {
             let sel_end = sel_start.max(self.cursor_position);
 
             // Find which lines are selected
-            for (line_idx, line) in wrapped_lines.iter().enumerate().skip(visible_start).take(visible_end - visible_start) {
+            for (line_idx, _line) in wrapped_lines.iter().enumerate().skip(visible_start).take(visible_end - visible_start) {
                 let (_, _, line_start, line_end) = position_map[line_idx];
 
                 // Check if this line contains selection

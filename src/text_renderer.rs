@@ -1,6 +1,6 @@
 use iced::widget::canvas::{Frame, Text, Path, Stroke, Fill};
 use iced::{Color, Point, alignment, Rectangle};
-use crate::text_document::{TextDocument, TextLine, TextSegment, TextStyle};
+use crate::text_document::{TextDocument, TextLine, TextStyle};
 
 /// Position of a rendered checkbox for hit detection
 #[derive(Debug, Clone)]

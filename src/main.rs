@@ -33,7 +33,7 @@ mod minimap_overlay;
 mod save_worker;
 mod ref_parser;
 
-use iced::widget::{button, column, container, row, svg, text, Space, scrollable, text_editor, pick_list, mouse_area, stack, text_input};
+use iced::widget::{button, column, container, row, svg, text, Space, scrollable, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
 use iced::{Border, Color, Shadow};
 use iced::time;
@@ -73,89 +73,10 @@ const DOT_SPACING: f32 = 30.0;
 const DOT_RADIUS: f32 = 2.0;
 const ANIMATION_DURATION_MS: f32 = 250.0;
 /// Auto-save workspace every N seconds
-const AUTO_SAVE_INTERVAL_SECS: f32 = 30.0;
 
 // Custom text editor style with visible cursor
-struct TransparentTextEditorStyle {
-    theme: Theme,
-    accent_color: Color,
-}
-
-impl text_editor::Catalog for TransparentTextEditorStyle {
-    type Class<'a> = IcedTheme;
-
-    fn default<'a>() -> Self::Class<'a> {
-        <IcedTheme as Default>::default()
-    }
-
-    fn style(&self, _class: &Self::Class<'_>, status: text_editor::Status) -> text_editor::Style {
-        let cursor_color = match self.theme {
-            Theme::Light => Color::from_rgb8(0, 0, 0),
-            Theme::Dark => Color::from_rgb8(255, 255, 255),
-        };
-
-        let accent = self.accent_color;
-        let accent_glow = self.theme.accent_glow_from(self.accent_color);
-        let text_value = match self.theme {
-            Theme::Light => Color::from_rgb8(0, 0, 0),
-            Theme::Dark => Color::from_rgb8(255, 255, 255),
-        };
-
-        match status {
-            text_editor::Status::Active => text_editor::Style {
-                background: iced::Background::Color(Color::TRANSPARENT),
-                border: iced::Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 0.0.into(),
-                },
-                icon: cursor_color,
-                placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                value: text_value,
-                selection: accent_glow,
-            },
-            text_editor::Status::Hovered => text_editor::Style {
-                background: iced::Background::Color(Color::TRANSPARENT),
-                border: iced::Border {
-                    color: Color::from_rgba(accent.r, accent.g, accent.b, 0.5),
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                icon: cursor_color,
-                placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                value: text_value,
-                selection: accent_glow,
-            },
-            text_editor::Status::Focused => text_editor::Style {
-                background: iced::Background::Color(Color::TRANSPARENT),
-                border: iced::Border {
-                    color: accent,
-                    width: 2.0,
-                    radius: 4.0.into(),
-                },
-                icon: cursor_color,
-                placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                value: text_value,
-                selection: accent_glow,
-            },
-            text_editor::Status::Disabled => text_editor::Style {
-                background: iced::Background::Color(Color::TRANSPARENT),
-                border: iced::Border {
-                    color: Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: 0.0.into(),
-                },
-                icon: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                placeholder: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                value: Color::from_rgba(0.5, 0.5, 0.5, 0.5),
-                selection: Color::from_rgba(accent.r, accent.g, accent.b, 0.2),
-            },
-        }
-    }
-}
-
 const APP_NAME: &str = "Cards";
-const APP_VERSION: &str = "0.2.2";
+const APP_VERSION: &str = "0.2.3";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum BoardAnimationType {
@@ -233,7 +154,6 @@ pub enum Message {
     HideCardTypeMenu,
     // Card content editing
     StartEditingCard(usize),
-    CardEditorAction(usize, text_editor::Action),
     KeyboardInput(iced::keyboard::Event),
     StopEditingCard,
     // Toolbar messages
@@ -414,11 +334,8 @@ struct Cards {
     // Cache SVG handles
     icon_menu_left: svg::Handle,
     icon_menu_right: svg::Handle,
-    icon_moon: svg::Handle,
-    icon_sun: svg::Handle,
     icon_settings: svg::Handle,
     icon_close: svg::Handle,
-    icon_add: svg::Handle,
     icon_duplicate: svg::Handle,
     icon_delete: svg::Handle,
     icon_pin: svg::Handle,
@@ -580,11 +497,8 @@ impl Cards {
             app_menu_animation_progress: 0.0,
             icon_menu_left: svg::Handle::from_memory(include_bytes!("icons/menu-left.svg")),
             icon_menu_right: svg::Handle::from_memory(include_bytes!("icons/menu-right.svg")),
-            icon_moon: svg::Handle::from_memory(include_bytes!("icons/moon.svg")),
-            icon_sun: svg::Handle::from_memory(include_bytes!("icons/sun.svg")),
             icon_settings: svg::Handle::from_memory(include_bytes!("icons/settings.svg")),
             icon_close: svg::Handle::from_memory(include_bytes!("icons/close.svg")),
-            icon_add: svg::Handle::from_memory(include_bytes!("icons/add.svg")),
             icon_duplicate: svg::Handle::from_memory(include_bytes!("icons/duplicate.svg")),
             icon_delete: svg::Handle::from_memory(include_bytes!("icons/delete.svg")),
             icon_pin:      svg::Handle::from_memory(icon_util::icon_to_svg(icondata_bs::BsPin)),
@@ -1260,7 +1174,7 @@ impl Cards {
                         }
                         self.dot_grid.clear_cards_cache();
                     }
-                    DotGridMessage::CardResizeStart(card_id, _pos) => {
+                    DotGridMessage::CardResizeStart(_card_id, _pos) => {
                         // Resize start is handled in canvas state
                         self.dot_grid.clear_cards_cache();
                     }
@@ -1657,8 +1571,7 @@ impl Cards {
             }
             Message::AddCard => {
                 if let Some(pos) = self.pending_card_position {
-                    let card_id = self.dot_grid.add_card(pos, self.accent_color);
-                    println!("Created card with id: {}, total cards: {}", card_id, self.dot_grid.cards().len());
+                    let _card_id = self.dot_grid.add_card(pos, self.accent_color);
                     self.workspace_dirty = true;
                 }
                 self.context_menu_position = None;
@@ -1744,9 +1657,6 @@ impl Cards {
                     card.content.move_cursor_to_end();
                 }
                 self.dot_grid.clear_cards_cache();
-            }
-            Message::CardEditorAction(card_id, action) => {
-                // Old text_editor action - no longer used with custom editor
             }
             Message::KeyboardInput(keyboard_event) => {
                 // Block canvas keyboard shortcuts while any modal is open
@@ -2048,22 +1958,14 @@ impl Cards {
 
                         match keyboard_event {
                             iced::keyboard::Event::KeyPressed { key, modifiers, text, .. } => {
-                                //eprintln!("=== KEY PRESSED ===");
-                                //eprintln!("Key: {:?}", key);
-                                //eprintln!("Text field: {:?}", text);
-                                //eprintln!("Modifiers - Shift: {}, Ctrl: {}, Alt: {}, Logo: {}",
-                                //    modifiers.shift(), modifiers.control(), modifiers.alt(), modifiers.logo());
-
                                 // Handle special Named keys FIRST (before text field)
                                 // These should trigger actions, not insert characters
                                 let handled_as_special = match key {
                                     Key::Named(iced::keyboard::key::Named::Enter) => {
-                                        //eprintln!("-> Enter key");
                                         card.content.insert_newline();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Backspace) => {
-                                        //eprintln!("-> Backspace (Ctrl: {})", modifiers.control());
                                         if modifiers.control() {
                                             card.content.delete_word_backward();
                                         } else {
@@ -2072,7 +1974,6 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Delete) => {
-                                        // eprintln!("-> Delete (Ctrl: {})", modifiers.control());
                                         if modifiers.control() {
                                             card.content.delete_word_forward();
                                         } else {
@@ -2081,7 +1982,6 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowLeft) => {
-                                        // eprintln!("-> ArrowLeft (Ctrl: {}, Shift: {})", modifiers.control(), modifiers.shift());
                                         if modifiers.control() {
                                             card.content.move_cursor_word_left(modifiers.shift());
                                         } else {
@@ -2090,7 +1990,6 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowRight) => {
-                                        // eprintln!("-> ArrowRight (Ctrl: {}, Shift: {})", modifiers.control(), modifiers.shift());
                                         if modifiers.control() {
                                             card.content.move_cursor_word_right(modifiers.shift());
                                         } else {
@@ -2099,31 +1998,19 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowUp) => {
-                                        // eprintln!("-> ArrowUp");
                                         card.content.move_cursor_up();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::ArrowDown) => {
-                                        // eprintln!("-> ArrowDown");
                                         card.content.move_cursor_down();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Home) => {
-                                        // eprintln!("-> Home");
-                                        if modifiers.control() {
-                                            card.content.move_cursor_to_start();
-                                        } else {
-                                            card.content.move_cursor_to_start();
-                                        }
+                                        card.content.move_cursor_to_start();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::End) => {
-                                        // eprintln!("-> End");
-                                        if modifiers.control() {
-                                            card.content.move_cursor_to_end();
-                                        } else {
-                                            card.content.move_cursor_to_end();
-                                        }
+                                        card.content.move_cursor_to_end();
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Tab) => {
@@ -2132,7 +2019,6 @@ impl Cards {
                                         true
                                     }
                                     Key::Named(iced::keyboard::key::Named::Escape) => {
-                                        // eprintln!("-> Escape - exiting edit mode");
                                         card.is_editing = false;
                                         self.editing_card_id = None;
                                         self.selected_card_id = None;
@@ -2456,7 +2342,6 @@ impl Cards {
 
                 // Trigger add animation if animations enabled
                 if self.config.general.enable_animations {
-                    println!("DEBUG: Starting AddBoard animation for board {}", self.boards.len() - 1);
                     self.board_list_animating = true;
                     self.board_list_animation_progress = 0.0;
                     self.board_list_animation_type = BoardAnimationType::AddBoard;
@@ -2506,7 +2391,6 @@ impl Cards {
                 if self.boards.len() > 1 && index < self.boards.len() {
                     // Trigger delete animation if animations enabled
                     if self.config.general.enable_animations {
-                        println!("DEBUG: Starting DeleteBoard animation for board {}", index);
                         self.board_list_animating = true;
                         self.board_list_animation_progress = 0.0;
                         self.board_list_animation_type = BoardAnimationType::DeleteBoard;
@@ -4083,7 +3967,7 @@ impl Cards {
         Subscription::batch([tick, events])
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let settings_icon = self.icon_settings.clone();
 
         let sidebar_bg = self.theme.sidebar_background();
@@ -4571,7 +4455,6 @@ impl Cards {
 
         let settings_btn_style = btn_style.clone();
         let menu_btn_style = btn_style.clone();
-        let floating_btn_style = btn_style.clone();
 
         let menu_icon = self.icon_menu.clone();
         let menu_button = button(
@@ -4991,8 +4874,6 @@ impl Cards {
 
         // Wrap boards section in stack if animating button position
         let boards_with_animation: Element<Message> = if animation_active && animation_type == BoardAnimationType::ButtonPositionChange {
-            println!("DEBUG: Creating stacked animated button at progress {:.2}", progress);
-
             let board_count = self.boards.len();
             let spacing = 5.0;
             let button_height = 36.0;
@@ -5014,8 +4895,6 @@ impl Cards {
             };
 
             let current_y = start_y + (end_y - start_y) * progress;
-
-            println!("DEBUG: Stacked button Y: {:.1} (start: {:.1}, end: {:.1})", current_y, start_y, end_y);
 
             let add_board_btn_style = CardButtonStyle {
                 background: self.theme.accent_bg(),
@@ -5065,7 +4944,6 @@ impl Cards {
 
         // Board drag-drop zone — shown when a card is being dragged
         let boards_or_drop_zone: Element<Message> = if self.card_drag_in_progress.is_some() {
-            let drag_card_id = self.card_drag_in_progress.unwrap();
             let drop_zone_bg = Color::from_rgba(
                 self.accent_color.r, self.accent_color.g, self.accent_color.b, 0.08,
             );
@@ -5677,156 +5555,7 @@ impl Cards {
         }
     }
 
-    fn build_app_menu(&self) -> Element<Message> {
-        let icon_color = self.theme.icon_color();
-        let accent_bg = self.theme.accent_bg_from(self.accent_color);
-        let separator_color = self.theme.accent_glow_from(self.accent_color);
-
-        let item_style = CardButtonStyle {
-            background: Color::TRANSPARENT,
-            background_hovered: accent_bg,
-            text_color: self.theme.button_text(),
-            border_color: Color::TRANSPARENT,
-            shadow_color: Color::TRANSPARENT,
-        };
-
-        // Helper: section label
-        fn make_label<'a>(label: &'static str, color: Color) -> Element<'a, Message> {
-            container(
-                text(label)
-                    .size(11)
-                    .color(Color::from_rgba(color.r, color.g, color.b, 0.6))
-                    .font(iced::Font { weight: iced::font::Weight::Semibold, ..Default::default() })
-            )
-            .padding(Padding { top: 6.0, right: 12.0, bottom: 2.0, left: 12.0 })
-            .into()
-        }
-
-        // Helper: separator line
-        fn make_sep<'a>(sep_color: Color) -> Element<'a, Message> {
-            container(Space::with_height(1))
-                .width(Length::Fill)
-                .height(1)
-                .style(move |_: &IcedTheme| container::Style {
-                    background: Some(iced::Background::Color(sep_color)),
-                    border: Border::default(),
-                    shadow: Shadow::default(),
-                    text_color: None,
-                })
-                .padding(Padding { top: 0.0, right: 8.0, bottom: 0.0, left: 8.0 })
-                .into()
-        }
-
-        // Helper: 4px spacer
-        fn make_gap<'a>() -> Element<'a, Message> {
-            Space::with_height(4).into()
-        }
-
-        let file_label = make_label("FILE", icon_color);
-        let view_label = make_label("VIEW", icon_color);
-        let help_label = make_label("HELP", icon_color);
-
-        let new_board_btn: Element<Message> = button(
-            container(text("New Board").size(13))
-                .width(Length::Fill)
-                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
-        )
-        .width(Length::Fill)
-        .class(item_style.clone())
-        .on_press(Message::MenuFileNewBoard)
-        .into();
-
-        let quit_btn: Element<Message> = button(
-            container(text("Quit").size(13))
-                .width(Length::Fill)
-                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
-        )
-        .width(Length::Fill)
-        .class(item_style.clone())
-        .on_press(Message::MenuFileQuit)
-        .into();
-
-        let reset_btn: Element<Message> = button(
-            container(text("Reset Canvas").size(13))
-                .width(Length::Fill)
-                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
-        )
-        .width(Length::Fill)
-        .class(item_style.clone())
-        .on_press(Message::MenuViewResetCanvas)
-        .into();
-
-        let toggle_sidebar_btn: Element<Message> = button(
-            container(text("Toggle Sidebar").size(13))
-                .width(Length::Fill)
-                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
-        )
-        .width(Length::Fill)
-        .class(item_style.clone())
-        .on_press(Message::MenuViewToggleSidebar)
-        .into();
-
-        // Theme label changes based on current theme
-        let toggle_theme_label = match self.theme {
-            crate::theme::Theme::Light => "Switch to Dark Mode",
-            crate::theme::Theme::Dark => "Switch to Light Mode",
-        };
-        let toggle_theme_btn: Element<Message> = button(
-            container(text(toggle_theme_label).size(13))
-                .width(Length::Fill)
-                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
-        )
-        .width(Length::Fill)
-        .class(item_style.clone())
-        .on_press(Message::MenuViewToggleTheme)
-        .into();
-
-        let shortcuts_btn: Element<Message> = button(
-            container(text("Keyboard Shortcuts").size(13))
-                .width(Length::Fill)
-                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
-        )
-        .width(Length::Fill)
-        .class(item_style.clone())
-        .on_press(Message::MenuHelpKeyboardShortcuts)
-        .into();
-
-        let about_btn: Element<Message> = button(
-            container(text("About").size(13))
-                .width(Length::Fill)
-                .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })
-        )
-        .width(Length::Fill)
-        .class(item_style)
-        .on_press(Message::MenuHelpAbout)
-        .into();
-
-        let content = column![
-            file_label,
-            new_board_btn,
-            quit_btn,
-            make_gap(),
-            make_sep(separator_color),
-            make_gap(),
-            view_label,
-            reset_btn,
-            toggle_sidebar_btn,
-            toggle_theme_btn,
-            make_gap(),
-            make_sep(separator_color),
-            make_gap(),
-            help_label,
-            shortcuts_btn,
-            about_btn,
-        ]
-        .spacing(0)
-        .padding(Padding { top: 6.0, right: 0.0, bottom: 6.0, left: 0.0 });
-
-        container(content)
-            .into()
-    }
-
-    fn build_context_menu(&self) -> Element<Message> {
+    fn build_context_menu(&self) -> Element<'_, Message> {
         let icon_color = self.theme.icon_color();
         let text_color = self.theme.button_text();
         let separator_color = self.theme.separator_color();
@@ -5913,7 +5642,7 @@ impl Cards {
         .into()
     }
 
-    fn build_card_type_menu(&self, card_id: usize) -> Element<Message> {
+    fn build_card_type_menu(&self, card_id: usize) -> Element<'_, Message> {
         let icon_color = self.theme.icon_color();
         let text_color = self.theme.button_text();
         let separator_color = self.theme.separator_color();
@@ -5998,7 +5727,7 @@ impl Cards {
         container(column![text_btn, sep, md_btn, sep2, img_btn].padding(4.0)).into()
     }
 
-    fn build_card_icon_menu(&self) -> Element<Message> {
+    fn build_card_icon_menu(&self) -> Element<'_, Message> {
         let separator_color = self.theme.icon_color().scale_alpha(0.2);
         let accent_bg = self.theme.accent_bg_from(self.accent_color);
 
@@ -6146,7 +5875,7 @@ impl Cards {
             .into()
     }
 
-    fn build_settings_content(&self) -> Element<Message> {
+    fn build_settings_content(&self) -> Element<'_, Message> {
         let separator_color = self.theme.separator_color();
         let text_color = self.theme.button_text();
         let icon_color = self.theme.icon_color();
@@ -6339,7 +6068,7 @@ impl Cards {
         .into()
     }
 
-    fn build_category_settings(&self) -> Element<Message> {
+    fn build_category_settings(&self) -> Element<'_, Message> {
         let content: Element<Message> = match self.settings_category {
             SettingsCategory::General => {
                 let sidebar_open_label = text("Open sidebar on start").size(14);
@@ -6935,7 +6664,7 @@ impl Cards {
         }
     }
 
-    fn build_toggle_button(&self, is_on: bool, message: Message) -> Element<Message> {
+    fn build_toggle_button(&self, is_on: bool, message: Message) -> Element<'_, Message> {
         let accent_bg = self.theme.accent_bg_from(self.accent_color);
         let btn_style = CardButtonStyle {
             background: if is_on { accent_bg } else { Color::TRANSPARENT },
@@ -6959,7 +6688,7 @@ impl Cards {
         .into()
     }
 
-    fn build_delete_confirm_dialog(&self) -> Element<Message> {
+    fn build_delete_confirm_dialog(&self) -> Element<'_, Message> {
         let bg_color = self.theme.sidebar_background();
         let text_color = self.theme.button_text();
         let accent = self.accent_color;

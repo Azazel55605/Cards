@@ -173,7 +173,7 @@ where
         _theme: &iced::Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
-        cursor: mouse::Cursor,
+        _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<MenuState>();

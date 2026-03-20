@@ -1,4 +1,4 @@
-use iced::{Color, Point};
+use iced::Color;
 
 /// Represents a styled text segment
 #[derive(Debug, Clone)]

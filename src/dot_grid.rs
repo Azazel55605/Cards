@@ -1,4 +1,4 @@
-use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder, gradient};
+use iced::widget::canvas::{Cache, Canvas, Geometry, Path, Program, Stroke, Frame, path::Builder};
 use iced::{Color, Element, Length, Point, Rectangle, Theme as IcedTheme, mouse, Vector};
 use std::cell::Cell;
 use crate::card::{Card, CardSide, Connection};
@@ -773,9 +773,8 @@ impl DotGrid {
                     // of each [[ref]] occurrence.
                     let mut visual_col: usize = 0;  // chars on current visual line
                     let mut visual_row: usize = 0;  // visual line index
-                    let mut byte_idx: usize = 0;
 
-                    // Build a map: byte_offset → (visual_row, visual_col)
+                    // Build a map: char_index → (visual_row, visual_col)
                     // by walking the content character by character with wrapping
                     let mut byte_to_pos: Vec<(usize, usize)> = Vec::with_capacity(content.len());
                     for ch in content.chars() {
@@ -790,7 +789,6 @@ impl DotGrid {
                                 visual_col = 0;
                             }
                         }
-                        byte_idx += ch.len_utf8();
                     }
                     byte_to_pos.push((visual_row, visual_col)); // sentinel
 
@@ -1030,11 +1028,6 @@ fn side_screen_pos(card: &Card, side: CardSide, offset: Vector) -> Point {
         CardSide::Left   => Point::new(sx, sy + card.height / 2.0),
         CardSide::Right  => Point::new(sx + card.width, sy + card.height / 2.0),
     }
-}
-
-/// Screen-space attachment point with bundle offset applied (matches card_layer rendering).
-fn bundled_side_pos(card: &Card, side: CardSide, offset: Vector, slot: usize, total: usize) -> Point {
-    side_pos_with_perp(card, side, offset, conn_perp_target(card, side, slot, total))
 }
 
 /// Compute the target perpendicular offset for a given slot in a bundle.
@@ -1366,8 +1359,6 @@ impl Program<DotGridMessage> for &DotGrid {
                                             Some(DotGridMessage::CardLeftClickBody(card.id)),
                                         );
                                     }
-
-                                    return (iced::widget::canvas::event::Status::Captured, None);
                                 }
                             }
 
