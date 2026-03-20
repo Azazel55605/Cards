@@ -105,6 +105,8 @@ pub struct DotGrid {
     dots_visible: bool,
     /// Whether to draw permanent grid lines between all dots.
     grid_lines: bool,
+    /// Cache for rendered math SVGs (typst).
+    pub math_cache: std::cell::RefCell<crate::math_renderer::MathCache>,
 }
 
 impl DotGrid {
@@ -147,6 +149,7 @@ impl DotGrid {
             cancel_drag_flag: Cell::new(false),
             dots_visible: true,
             grid_lines: false,
+            math_cache: std::cell::RefCell::new(crate::math_renderer::MathCache::new(14.0)),
         }
     }
 
@@ -156,6 +159,7 @@ impl DotGrid {
         }
         self.font = font;
         self.font_size = size;
+        self.math_cache.borrow_mut().set_font_size(size);
         // Update all existing cards
         for card in &mut self.cards {
             card.content.set_font(font, size);
@@ -644,21 +648,15 @@ impl DotGrid {
     /// Update checkbox positions for a card after rendering
     pub fn update_card_checkbox_positions(&mut self, card_id: usize) {
         use crate::text_processor::TextProcessor;
-        use crate::card::CardType;
 
         if let Some(card) = self.cards.iter_mut().find(|c| c.id == card_id) {
             card.checkbox_positions.clear();
 
             if !card.is_editing {
                 let content_text = card.content.text();
-                let card_type = card.card_type;
                 if !content_text.is_empty() {
                     let processor = TextProcessor::with_font_size(self.font_size);
-                    let document = if card_type == CardType::Markdown {
-                        processor.parse_full_markdown(&content_text)
-                    } else {
-                        processor.process(&content_text)
-                    };
+                    let document = processor.parse_full_markdown(&content_text);
 
                     // Store positions relative to card origin (no canvas offset).
                     // The offset is applied at hit-test time so panning never invalidates them.
@@ -677,7 +675,7 @@ impl DotGrid {
 
                         let max_size = line.segments.iter()
                             .map(|seg| seg.style.size)
-                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .max_by(|a: &f32, b: &f32| a.partial_cmp(b).unwrap())
                             .unwrap_or(14.0);
                         let line_height = 21.0 * (max_size / 14.0);
 

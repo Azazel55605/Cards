@@ -25,6 +25,7 @@ pub struct TextStyle {
     pub underline: bool,
     pub is_code: bool,
     pub is_link: bool,
+    pub is_math: bool,
     pub color: Option<Color>, // None means use default
 }
 
@@ -44,6 +45,7 @@ impl TextStyle {
             underline: false,
             is_code: false,
             is_link: false,
+            is_math: false,
             color: None,
         }
     }
@@ -85,6 +87,14 @@ impl TextStyle {
     pub fn code() -> Self {
         Self {
             is_code: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn math() -> Self {
+        Self {
+            is_math: true,
+            italic: true,
             ..Default::default()
         }
     }
@@ -131,7 +141,13 @@ pub struct TextLine {
     pub spacing_before: f32,
     pub spacing_after: f32,
     pub checkbox: Option<CheckboxItem>, // If this line has a checkbox
-    pub is_rule: bool, // Horizontal rule — rendered as a full-width line
+    pub is_rule: bool,       // Horizontal rule — rendered as a full-width line
+    pub quote_depth: u8,     // 0 = not a blockquote; >0 = nesting depth
+    pub is_math_block: bool, // Display math block ($$...$$)
+    /// When `Some`, this line is a table row. Each inner Vec is one cell's segments.
+    /// `is_table_header` marks the first row (bold, followed by a separator rule).
+    pub table_cells: Option<Vec<Vec<TextSegment>>>,
+    pub is_table_header: bool,
 }
 
 impl Default for TextLine {
@@ -143,6 +159,10 @@ impl Default for TextLine {
             spacing_after: 0.0,
             checkbox: None,
             is_rule: false,
+            quote_depth: 0,
+            is_math_block: false,
+            table_cells: None,
+            is_table_header: false,
         }
     }
 }
@@ -185,8 +205,28 @@ impl TextLine {
         self
     }
 
+    pub fn with_quote_depth(mut self, depth: u8) -> Self {
+        self.quote_depth = depth;
+        if depth > 0 && self.indent < (depth as f32 * 12.0) {
+            self.indent = depth as f32 * 12.0;
+        }
+        self
+    }
+
+    pub fn as_math_block(mut self) -> Self {
+        self.is_math_block = true;
+        self
+    }
+
+    pub fn as_table_row(mut self, cells: Vec<Vec<TextSegment>>, is_header: bool) -> Self {
+        self.table_cells = Some(cells);
+        self.is_table_header = is_header;
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.is_rule == false && (self.segments.is_empty() || self.segments.iter().all(|s| s.text.trim().is_empty()))
+        !self.is_rule && !self.is_math_block && self.table_cells.is_none()
+            && (self.segments.is_empty() || self.segments.iter().all(|s| s.text.trim().is_empty()))
     }
 }
 

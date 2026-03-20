@@ -17,11 +17,20 @@ pub struct LinkPosition {
     pub url: String,
 }
 
+/// A math segment that should be drawn as a typeset SVG instead of raw text.
+#[derive(Debug, Clone)]
+pub struct MathPosition {
+    pub formula:    String,
+    pub rect:       Rectangle,
+    pub is_display: bool,
+}
+
 /// General text renderer - renders styled text documents
 pub struct TextRenderer {
     pub text_color: Color,
     pub link_color: Color,
     pub code_bg_color: Color,
+    pub math_bg_color: Color,
     pub max_width: f32,
     pub max_height: Option<f32>, // None = unlimited, Some(height) = clip at height
     pub font_regular: iced::Font,
@@ -34,6 +43,7 @@ impl TextRenderer {
             text_color,
             link_color: Color::from_rgb8(88, 166, 255), // default blue
             code_bg_color: Color::from_rgba(0.5, 0.5, 0.5, 0.15),
+            math_bg_color: Color::from_rgba(0.55, 0.35, 0.75, 0.15),
             max_width,
             max_height: None,
             font_regular: iced::Font::MONOSPACE,
@@ -46,6 +56,7 @@ impl TextRenderer {
             text_color,
             link_color: Color::from_rgb8(88, 166, 255),
             code_bg_color: Color::from_rgba(0.5, 0.5, 0.5, 0.15),
+            math_bg_color: Color::from_rgba(0.55, 0.35, 0.75, 0.15),
             max_width,
             max_height: None,
             font_regular,
@@ -64,6 +75,7 @@ impl TextRenderer {
             text_color,
             link_color: Color::from_rgb8(88, 166, 255),
             code_bg_color: Color::from_rgba(0.5, 0.5, 0.5, 0.15),
+            math_bg_color: Color::from_rgba(0.55, 0.35, 0.75, 0.15),
             max_width,
             max_height: Some(max_height),
             font_regular,
@@ -81,12 +93,13 @@ impl TextRenderer {
         self
     }
 
-    /// Render a text document. Returns (height, checkboxes, links).
-    pub fn render(&self, frame: &mut Frame, document: &TextDocument, position: Point) -> (f32, Vec<CheckboxPosition>, Vec<LinkPosition>) {
+    /// Render a text document. Returns (height, checkboxes, links, math_positions).
+    pub fn render(&self, frame: &mut Frame, document: &TextDocument, position: Point) -> (f32, Vec<CheckboxPosition>, Vec<LinkPosition>, Vec<MathPosition>) {
         let mut current_y = position.y;
         let start_y = position.y;
         let mut checkbox_positions = Vec::new();
         let mut link_positions: Vec<LinkPosition> = Vec::new();
+        let mut math_positions: Vec<MathPosition> = Vec::new();
 
         for line in &document.lines {
             if let Some(max_h) = self.max_height {
@@ -109,6 +122,40 @@ impl TextRenderer {
                 continue;
             }
 
+            // ── Table row ────────────────────────────────────────────────────
+            if let Some(cells) = &line.table_cells {
+                current_y += line.spacing_before;
+                if let Some(max_h) = self.max_height {
+                    if current_y - start_y >= max_h { break; }
+                }
+                let num_cols = cells.len().max(1);
+                let col_width = self.max_width / num_cols as f32;
+                let line_height = 21.0 * (14.0_f32 / 14.0); // base line height
+                // Draw each cell
+                for (col_idx, cell_segments) in cells.iter().enumerate() {
+                    let cell_x = position.x + col_idx as f32 * col_width;
+                    let mut seg_x = cell_x + 4.0; // small left padding per cell
+                    for seg in cell_segments {
+                        if seg.text.is_empty() { continue; }
+                        self.render_text_segment(frame, &seg.text, seg_x, current_y, seg.style);
+                        let char_width = 8.43 * (seg.style.size / 14.0);
+                        seg_x += seg.text.chars().count() as f32 * char_width;
+                    }
+                    // Draw column separator (except after the last column)
+                    if col_idx + 1 < num_cols {
+                        let sep_x = cell_x + col_width - 1.0;
+                        let sep_color = Color { a: self.text_color.a * 0.3, ..self.text_color };
+                        let sep_line = Path::line(
+                            Point::new(sep_x, current_y),
+                            Point::new(sep_x, current_y + line_height),
+                        );
+                        frame.stroke(&sep_line, Stroke::default().with_color(sep_color).with_width(1.0));
+                    }
+                }
+                current_y += line_height + line.spacing_after;
+                continue;
+            }
+
             if line.is_empty() {
                 current_y += 8.0;
                 continue;
@@ -120,7 +167,71 @@ impl TextRenderer {
                 if current_y - start_y >= max_h { break; }
             }
 
+            // ── Display math block ───────────────────────────────────────────
+            if line.is_math_block {
+                let formula = line.segments.iter()
+                    .map(|s| s.text.as_str()).collect::<Vec<_>>().join("");
+                let line_height = self.calculate_line_height(line);
+                math_positions.push(MathPosition {
+                    formula,
+                    rect: Rectangle {
+                        x:      position.x + line.indent,
+                        y:      current_y,
+                        width:  self.max_width - line.indent,
+                        height: line_height,
+                    },
+                    is_display: true,
+                });
+                current_y += line_height + line.spacing_after;
+                continue;
+            }
+
             let line_height = self.calculate_line_height(line);
+
+            // ── Collect inline math from this line ────────────────────────────
+            for seg in &line.segments {
+                if seg.style.is_math {
+                    let char_width = 8.43 * (seg.style.size / 14.0);
+                    let est_width = seg.text.chars().count() as f32 * char_width;
+                    math_positions.push(MathPosition {
+                        formula: seg.text.clone(),
+                        rect: Rectangle {
+                            x:      position.x + line.indent,
+                            y:      current_y,
+                            width:  est_width.max(20.0),
+                            height: line_height,
+                        },
+                        is_display: false,
+                    });
+                }
+            }
+
+            // ── Blockquote vertical bar ──────────────────────────────────────
+            if line.quote_depth > 0 {
+                let bar_color = Color { a: self.text_color.a * 0.4, ..self.text_color };
+                for d in 0..line.quote_depth {
+                    let bar_x = position.x + d as f32 * 12.0 + 2.0;
+                    let bar = Path::line(
+                        Point::new(bar_x, current_y),
+                        Point::new(bar_x, current_y + line_height),
+                    );
+                    frame.stroke(&bar, Stroke::default().with_color(bar_color).with_width(3.0));
+                }
+            }
+
+            // ── Math block background ────────────────────────────────────────
+            if line.is_math_block {
+                let bg_path = Path::rounded_rectangle(
+                    Point::new(position.x, current_y - 1.0),
+                    iced::Size::new(self.max_width, line_height + 2.0),
+                    4.0_f32.into(),
+                );
+                frame.fill(&bg_path, Fill {
+                    style: iced::widget::canvas::Style::Solid(self.math_bg_color),
+                    ..Default::default()
+                });
+            }
+
             let (new_y, checkbox_pos, mut line_links) = self.render_line(frame, line, position.x + line.indent, current_y, line_height, start_y);
             current_y = new_y;
 
@@ -132,7 +243,7 @@ impl TextRenderer {
             current_y += line.spacing_after;
         }
 
-        (current_y - position.y, checkbox_positions, link_positions)
+        (current_y - position.y, checkbox_positions, link_positions, math_positions)
     }
 
     fn calculate_line_height(&self, line: &TextLine) -> f32 {
@@ -324,6 +435,14 @@ impl TextRenderer {
         let text_color = style.color.unwrap_or_else(|| {
             if style.is_link {
                 self.link_color
+            } else if style.is_math {
+                // Soft purple tint for math
+                Color {
+                    r: (self.text_color.r * 0.85 + 0.15).min(1.0),
+                    g: (self.text_color.g * 0.75).min(1.0),
+                    b: (self.text_color.b * 0.9 + 0.1).min(1.0),
+                    a: self.text_color.a,
+                }
             } else if style.is_code {
                 Color {
                     r: self.text_color.r.min(1.0),
@@ -344,8 +463,9 @@ impl TextRenderer {
         let char_width = style.size * 0.55;
         let text_width = text.len() as f32 * char_width;
 
-        // Draw inline code background before the text
-        if style.is_code {
+        // Draw inline code/math background before the text
+        if style.is_code || style.is_math {
+            let bg_color = if style.is_math { self.math_bg_color } else { self.code_bg_color };
             let pad_x = 3.0_f32;
             let pad_y = 1.0_f32;
             let bg_rect = iced::Rectangle {
@@ -360,7 +480,7 @@ impl TextRenderer {
                 3.0_f32.into(),
             );
             frame.fill(&bg_path, Fill {
-                style: iced::widget::canvas::Style::Solid(self.code_bg_color),
+                style: iced::widget::canvas::Style::Solid(bg_color),
                 ..Default::default()
             });
         }

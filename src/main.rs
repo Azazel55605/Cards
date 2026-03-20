@@ -32,6 +32,8 @@ mod zoom_bar;
 mod minimap_overlay;
 mod save_worker;
 mod ref_parser;
+mod math_renderer;
+mod latex_to_typst;
 
 use iced::widget::{button, column, container, row, svg, text, Space, scrollable, pick_list, mouse_area, stack, text_input};
 use iced::{Element, Length, Point, Rectangle, Theme as IcedTheme, Subscription, Vector, Task};
@@ -1265,14 +1267,7 @@ impl Cards {
                     DotGridMessage::CheckboxToggle(card_id, line_index) => {
                         if let Some(card) = self.dot_grid.cards_mut().iter_mut().find(|c| c.id == card_id) {
                             let text = card.content.text();
-                            let card_type = card.card_type;
-                            // For Markdown cards, toggle directly in plain text.
-                            // For legacy <md>-tagged cards, use the tag-aware helper.
-                            let updated_text = if card_type == crate::card::CardType::Markdown {
-                                Self::toggle_checkbox_markdown(&text, line_index)
-                            } else {
-                                Self::toggle_checkbox_in_text(&text, line_index, self.config.general.debug_mode)
-                            };
+                            let updated_text = Self::toggle_checkbox_markdown(&text, line_index);
                             card.content.set_text(updated_text);
                             self.dot_grid.clear_cards_cache();
                             self.dot_grid.update_card_checkbox_positions(card_id);
@@ -1352,8 +1347,9 @@ impl Cards {
 
                                 let relative_x = (click_pos.x - card_screen_x - padding).max(0.0);
                                 let relative_y = (click_pos.y - card_screen_y - top_bar_height - padding).max(0.0);
+                                let max_width = card.width - padding * 2.0;
 
-                                card.content.click_at_position(relative_x, relative_y);
+                                card.content.click_at_position(relative_x, relative_y, max_width);
                                 self.dot_grid.clear_cards_cache();
                             }
                         }
@@ -1411,8 +1407,9 @@ impl Cards {
 
                                 let relative_x = (drag_pos.x - card_screen_x - padding).max(0.0);
                                 let relative_y = (drag_pos.y - card_screen_y - top_bar_height - padding).max(0.0);
+                                let max_width = card.width - padding * 2.0;
 
-                                card.content.drag_to_position(relative_x, relative_y);
+                                card.content.drag_to_position(relative_x, relative_y, max_width);
                                 self.dot_grid.clear_cards_cache();
                             }
                         }
@@ -2137,21 +2134,6 @@ impl Cards {
                                             card.content.insert_char(' ');
                                         }
 
-                                        // Auto-complete <md> tags
-                                        // Check if we just typed '>' and if the text before cursor is '<md'
-                                        let current_text = card.content.text();
-                                        let cursor_pos = card.content.cursor_position;
-
-                                        // Check if we just typed '>' (text ends with '<md>')
-                                        if cursor_pos >= 4 && cursor_pos <= current_text.len() {
-                                            let before_cursor = &current_text[..cursor_pos];
-                                            if before_cursor.ends_with("<md>") {
-                                                // Insert newline, empty line, closing tag
-                                                card.content.insert_text("\n\n</md>");
-                                                // Move cursor back to the empty line
-                                                card.content.cursor_position = cursor_pos + 1;
-                                            }
-                                        }
                                     }
                                 }
 
@@ -3852,85 +3834,6 @@ impl Cards {
         result
     }
 
-    fn toggle_checkbox_in_text(text: &str, line_index: usize, debug_mode: bool) -> String {
-        let mut result = String::new();
-        let mut checkbox_counter = 0;  // Global counter across ALL md blocks
-        let mut pos = 0;
-
-        if debug_mode {
-            println!("DEBUG: toggle_checkbox_in_text - looking for line_index: {}", line_index);
-        }
-
-        while pos < text.len() {
-            // Look for <md> tag
-            if let Some(md_start) = text[pos..].find("<md>") {
-                let actual_md_start = pos + md_start;
-
-                // Copy everything before <md> tag
-                result.push_str(&text[pos..actual_md_start]);
-                result.push_str("<md>");
-
-                // Find closing </md> tag
-                let md_content_start = actual_md_start + 4;
-                if let Some(md_end) = text[md_content_start..].find("</md>") {
-                    let actual_md_end = md_content_start + md_end;
-                    let markdown_content = &text[md_content_start..actual_md_end];
-
-                    if debug_mode {
-                        println!("DEBUG: Found md block, content: '{}'", markdown_content);
-                    }
-
-                    // Process each line in the markdown content
-                    for line in markdown_content.lines() {
-                        let is_checkbox = line.trim_start().starts_with("- [ ]") ||
-                                         line.trim_start().starts_with("- [x]") ||
-                                         line.trim_start().starts_with("- [X]");
-
-                        if is_checkbox {
-                            if debug_mode {
-                                println!("DEBUG: Found checkbox at counter {}: '{}'", checkbox_counter, line);
-                            }
-                            if checkbox_counter == line_index {
-                                if debug_mode {
-                                    println!("DEBUG: MATCH! Toggling checkbox");
-                                }
-                                // Toggle this checkbox
-                                if line.contains("- [ ]") {
-                                    result.push_str(&line.replace("- [ ]", "- [x]"));
-                                } else {
-                                    result.push_str(&line.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]"));
-                                }
-                            } else {
-                                result.push_str(line);
-                            }
-                            checkbox_counter += 1;
-                        } else {
-                            result.push_str(line);
-                        }
-                        result.push('\n');
-                    }
-
-                    // Remove trailing newline if markdown_content didn't end with one
-                    if !markdown_content.ends_with('\n') && result.ends_with('\n') {
-                        result.pop();
-                    }
-
-                    result.push_str("</md>");
-                    pos = actual_md_end + 5; // Move past </md>
-                } else {
-                    // No closing tag found, copy rest as-is
-                    result.push_str(&text[actual_md_start..]);
-                    break;
-                }
-            } else {
-                // No more <md> tags, copy rest
-                result.push_str(&text[pos..]);
-                break;
-            }
-        }
-        
-        result
-    }
 
     fn subscription(&self) -> Subscription<Message> {
         // Always tick for card animations
@@ -4018,7 +3921,9 @@ impl Cards {
             self.dot_grid.pending_cursor(),
             self.dot_grid.conn_anim_phase(),
             self.dot_grid.conn_slot_anim(),
-        ).with_zoom(self.canvas_zoom).into();
+        ).with_zoom(self.canvas_zoom)
+        .with_math_cache(&self.dot_grid.math_cache)
+        .into();
 
         let mut shelf = CardShelf::new(
             self.window_size.width,

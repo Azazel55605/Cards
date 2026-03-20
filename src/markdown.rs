@@ -1,6 +1,6 @@
 use iced::widget::canvas::Frame;
 use iced::{Color, Point};
-use crate::text_renderer::{TextRenderer, CheckboxPosition, LinkPosition};
+use crate::text_renderer::{TextRenderer, CheckboxPosition, LinkPosition, MathPosition};
 use crate::text_processor::TextProcessor;
 
 /// MarkdownRenderer - now a simple wrapper around the new text processing system
@@ -66,17 +66,9 @@ impl MarkdownRenderer {
         self.text_renderer.code_bg_color = color;
     }
 
-    /// Render text with markdown support via <md> tags
-    pub fn render(&self, frame: &mut Frame, text: &str, position: Point) -> (f32, Vec<CheckboxPosition>, Vec<LinkPosition>) {
-        // Process text (handles both plain text and <md> tags)
-        let document = self.text_processor.process(text);
-
-        // Render the document
-        self.text_renderer.render(frame, &document, position)
-    }
-
-    /// Render the entire string as pure markdown (no <md> tag required).
-    pub fn render_as_markdown(&self, frame: &mut Frame, text: &str, position: Point) -> (f32, Vec<CheckboxPosition>, Vec<LinkPosition>) {
+    /// Render the entire string as pure markdown.
+    /// Returns (height, checkboxes, links, math_positions).
+    pub fn render_as_markdown(&self, frame: &mut Frame, text: &str, position: Point) -> (f32, Vec<CheckboxPosition>, Vec<LinkPosition>, Vec<MathPosition>) {
         let document = self.text_processor.parse_full_markdown(text);
         self.text_renderer.render(frame, &document, position)
     }

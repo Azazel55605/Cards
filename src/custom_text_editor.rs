@@ -385,98 +385,66 @@ impl CustomTextEditor {
         self.last_blink = Instant::now();
     }
 
-    /// Position cursor based on mouse click coordinates
-    /// relative_x and relative_y are relative to the text area origin
-    pub fn click_at_position(&mut self, relative_x: f32, relative_y: f32) {
-        // Calculate which line was clicked based on y position
-        let line_index = ((relative_y / self.line_height) as usize).max(0);
+    /// Position cursor based on mouse click coordinates.
+    /// `relative_x` / `relative_y` are relative to the text area origin.
+    /// `max_width` must match the rendered width so wrapped lines map correctly.
+    pub fn click_at_position(&mut self, relative_x: f32, relative_y: f32, max_width: f32) {
+        let (_, position_map) = self.wrap_and_map_positions(&self.text, max_width);
 
-        // Get the lines
-        let lines: Vec<&str> = self.text.split('\n').collect();
-
-        if line_index >= lines.len() {
-            // Clicked beyond last line - move to end
-            self.cursor_position = self.text.len();
+        if position_map.is_empty() {
+            self.cursor_position = 0;
             self.selection_start = None;
             self.last_blink = Instant::now();
             return;
         }
 
-        // Calculate byte offset to the start of this line
-        let mut line_start_offset = 0;
-        for i in 0..line_index {
-            if i < lines.len() {
-                line_start_offset += lines[i].len() + 1; // +1 for newline
-            }
-        }
+        let visual_line = ((relative_y / self.line_height) as usize)
+            .min(position_map.len() - 1);
+        let (_, _, line_start, line_end) = position_map[visual_line];
 
-        // Calculate character position within the line based on x
-        let line = lines[line_index];
-        let char_index = (relative_x / self.char_width).round() as usize;
-
-        // Find the byte offset within the line
-        let mut byte_offset = 0;
-        let mut char_count = 0;
-        for ch in line.chars() {
-            if char_count >= char_index {
-                break;
-            }
-            byte_offset += ch.len_utf8();
-            char_count += 1;
-        }
-
-        // Set cursor position
-        self.cursor_position = line_start_offset + byte_offset.min(line.len());
+        self.cursor_position = self.col_to_byte(line_start, line_end, relative_x);
         self.selection_start = None;
         self.last_blink = Instant::now();
     }
 
-    /// Position cursor and start/extend selection based on drag
-    pub fn drag_to_position(&mut self, relative_x: f32, relative_y: f32) {
-        // If no selection started yet, start one from current cursor position
+    /// Position cursor and start/extend selection based on drag.
+    /// `max_width` must match the rendered width so wrapped lines map correctly.
+    pub fn drag_to_position(&mut self, relative_x: f32, relative_y: f32, max_width: f32) {
         if self.selection_start.is_none() {
             self.selection_start = Some(self.cursor_position);
         }
 
-        // Calculate which line was dragged to
-        let line_index = ((relative_y / self.line_height) as usize).max(0);
+        let (_, position_map) = self.wrap_and_map_positions(&self.text, max_width);
 
-        // Get the lines
-        let lines: Vec<&str> = self.text.split('\n').collect();
-
-        if line_index >= lines.len() {
-            // Dragged beyond last line - move to end
+        if position_map.is_empty() {
             self.cursor_position = self.text.len();
             self.last_blink = Instant::now();
             return;
         }
 
-        // Calculate byte offset to the start of this line
-        let mut line_start_offset = 0;
-        for i in 0..line_index {
-            if i < lines.len() {
-                line_start_offset += lines[i].len() + 1; // +1 for newline
-            }
-        }
+        let visual_line = ((relative_y / self.line_height) as usize)
+            .min(position_map.len() - 1);
+        let (_, _, line_start, line_end) = position_map[visual_line];
 
-        // Calculate character position within the line based on x
-        let line = lines[line_index];
+        self.cursor_position = self.col_to_byte(line_start, line_end, relative_x);
+        self.last_blink = Instant::now();
+    }
+
+    /// Map an x pixel offset within a visual line (given by its [start, end] byte range)
+    /// to a byte position in `self.text`.
+    fn col_to_byte(&self, line_start: usize, line_end: usize, relative_x: f32) -> usize {
+        let start = line_start.min(self.text.len());
+        let end = line_end.min(self.text.len());
+        let line_text = &self.text[start..end];
         let char_index = (relative_x / self.char_width).round() as usize;
-
-        // Find the byte offset within the line
         let mut byte_offset = 0;
         let mut char_count = 0;
-        for ch in line.chars() {
-            if char_count >= char_index {
-                break;
-            }
+        for ch in line_text.chars() {
+            if char_count >= char_index { break; }
             byte_offset += ch.len_utf8();
             char_count += 1;
         }
-
-        // Set cursor position (keeping selection_start)
-        self.cursor_position = line_start_offset + byte_offset.min(line.len());
-        self.last_blink = Instant::now();
+        (start + byte_offset).min(self.text.len())
     }
 
     pub fn get_selected_text(&self) -> Option<String> {

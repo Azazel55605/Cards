@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::card::{Card, CardSide, CardType, Connection, LineStyle};
 use crate::markdown::MarkdownRenderer;
+use crate::math_renderer::MathCache;
 use crate::icon_util;
 
 const ICON_TYPE_TEXT:     &[u8] = include_bytes!("icons/type-text.svg");
@@ -44,6 +45,8 @@ pub struct CardLayer<'a> {
     conn_slot_anim:       Option<&'a HashMap<(usize, CardSide, usize, CardSide), (f32, f32)>>,
     // Zoom
     zoom:                 f32,
+    // Math SVG cache
+    math_cache:           Option<&'a std::cell::RefCell<MathCache>>,
 }
 
 impl<'a> CardLayer<'a> {
@@ -80,7 +83,13 @@ impl<'a> CardLayer<'a> {
             conn_anim_phase: 0.0,
             conn_slot_anim: None,
             zoom: 1.0,
+            math_cache: None,
         }
+    }
+
+    pub fn with_math_cache(mut self, cache: &'a std::cell::RefCell<MathCache>) -> Self {
+        self.math_cache = Some(cache);
+        self
     }
 
     pub fn with_references(mut self, ids: HashSet<usize>) -> Self {
@@ -265,7 +274,33 @@ impl<'a> CardLayer<'a> {
                         md_rr.set_code_bg(code_bg);
                         // Preprocess [[ref]] links into markdown link syntax
                         let preprocessed = crate::ref_parser::preprocess_refs_for_markdown(&content_text);
-                        let _ = md_rr.render_as_markdown(frame, &preprocessed, Point::new(text_x, text_y));
+                        let (_, _, _, math_positions) =
+                            md_rr.render_as_markdown(frame, &preprocessed, Point::new(text_x, text_y));
+
+                        // Draw typeset math SVGs on top of the rendered text
+                        if let Some(cache_cell) = self.math_cache {
+                            let mut cache = cache_cell.borrow_mut();
+                            for mp in &math_positions {
+                                if let Some(entry) = cache.get_or_render(&mp.formula, mp.is_display) {
+                                    let entry = entry.clone();
+                                    // Scale SVG to fit the reserved rect, preserving aspect ratio
+                                    let aspect = if entry.height > 0.0 { entry.width / entry.height } else { 1.0 };
+                                    let (draw_w, draw_h) = if mp.is_display {
+                                        let h = entry.height.min(mp.rect.height * 2.0).max(mp.rect.height);
+                                        (h * aspect, h)
+                                    } else {
+                                        let h = mp.rect.height.min(entry.height * 1.1);
+                                        (h * aspect, h)
+                                    };
+                                    let draw_x = mp.rect.x;
+                                    let draw_y = mp.rect.y + (mp.rect.height - draw_h) / 2.0;
+                                    frame.draw_svg(
+                                        Rectangle { x: draw_x, y: draw_y, width: draw_w, height: draw_h },
+                                        SvgDrawable::new(entry.handle).color(self.card_text),
+                                    );
+                                }
+                            }
+                        }
                     }
                     CardType::Text => {
                         use crate::text_document::{TextDocument, TextLine, TextStyle};
